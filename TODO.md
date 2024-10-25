@@ -13,7 +13,7 @@
 Assume binary protocol is always little endian 
 
 ### parts
-1. Fixed size (4000?). Contains the database metadata and/or configuration.
+1. Fixed size (4KB?). Contains the database metadata and/or configuration.
 2. Dynamic size. Contains the key-value pair.
    - 8 byte for the size of the key
    - Key bytes
