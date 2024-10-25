@@ -1,0 +1,32 @@
+# My todo
+- [x] Dont use a pointer to the allocator
+- [ ] Fix the null terminated string issue
+
+# Todo
+- [x] Deletion
+  - [x] test_art "insert search delete" test has revealed a bug in deletion. trying to figure out what node type is has the bug.
+- [x] figure out whats wrong with iterPrefix, reenable tests.
+- [x] Port more tests and move tests to another file. 
+- [x] Add print to stream.
+- [x] Rethink the callback signature.  I'm wondering if using `data: *c_void` param is leading to or related to the failed iter_prefix tests. 
+  - [x] use var rather than *c_void.
+- [x] iter shouldn't visit non-leaf nodes.
+- [x] make use of childIterator() where possible.
+- [x] rename ArtTree -> Art
+- [ ] Remove the null termination + increased length requirement without sacrificing performance / simplicity?
+- [ ] Save space by
+  - [ ] Chop off null terminator in leaves.
+  - [ ] Don't store whole key in leaves. 
+  - [ ] Don't allocate the keys, only store pointers.
+- [x] build.zig
+- [x] Clean up the mess. 
+- [x] Benchmark against StringHashMap
+- [x] Add a simple repl.
+  - [x] write usage
+- [x] SIMD for node16 add and find.
+- [x] make a fileEachLine helper to shrink the size of the tests.
+- [x] reduce Node size.  @sizeOf(Node) was above 2000 bytes!
+  - [x] store pointer to keys and children. reduces size of Node to 40 bytes
+- [x] use sentinel terminated slices and remove the 'user increment length' requirement. 
+- [ ] allow keys to be different data type
+- [x] currently makeLeaf does 2 allocations and allocNode does 3. reduce these to 1 each. 

@@ -1,0 +1,603 @@
+const std = @import("std");
+const art = @import("art");
+const utils = @import("utils.zig");
+
+const Owned = utils.Owned;
+const bytes = []const u8;
+const cstr = [:0]const u8;
+const Atomic = std.atomic.Value;
+
+const assert = struct {
+    fn _assert(ok: bool, comptime fmt: []const u8, args: anytype) void {
+        if (!ok) {
+            std.debug.print(fmt, args);
+            std.debug.assert(ok);
+        }
+    }
+}._assert;
+
+const METADATA_SIZE = 1 << 12;
+
+pub const DB = struct {
+    path: bytes,
+    allocator: std.mem.Allocator,
+    tree: art.Art(DataPtr),
+    file: std.fs.File,
+    gc_data: *GC,
+
+    const GC = struct {
+        prev_pos: Atomic(u64) = Atomic(u64).init(0),
+        collecting: Atomic(u8) = Atomic(u8).init(0),
+    };
+
+    const DataPtr = struct {
+        pos: u64,
+        size: u64,
+        owned: bool,
+    };
+
+    const Entry = struct {
+        key: [:0]const u8,
+        value_size: u64,
+        pos: u64,
+        active: bool,
+    };
+
+    pub fn init(allocator: std.mem.Allocator, path: bytes) !DB {
+        const tree = art.Art(DataPtr).init(allocator);
+        var db: DB = .{
+            .path = path,
+            .allocator = allocator,
+            .tree = tree,
+            .file = undefined,
+            .gc_data = undefined,
+        };
+        errdefer db.deinit();
+
+        db.gc_data = try db.allocator.create(GC);
+        db.gc_data.* = GC{};
+        // TODO add diagnostic for better error logging?
+        try db.start();
+        return db;
+    }
+
+    pub fn deinit(self: *DB) void {
+        const free_callback = struct {
+            fn f(node: *art.Art(DataPtr).Node, db: *DB, _: usize) !bool {
+                if (node.*.leaf.value.owned) {
+                    db.allocator.free(node.leaf.key);
+                }
+                return false;
+            }
+        }.f;
+        _ = self.tree.iter(self, free_callback) catch {};
+        self.tree.deinit();
+        self.allocator.destroy(self.gc_data);
+    }
+
+    noinline fn start(self: *DB) !void {
+        std.debug.assert(!std.fs.path.isAbsolute(self.path));
+
+        const cwd = std.fs.cwd();
+        _ = cwd.statFile(self.path) catch {
+            const file = try cwd.createFile(self.path, .{ .mode = 0o644 });
+            const buff: [METADATA_SIZE]u8 = std.mem.zeroes([METADATA_SIZE]u8);
+            const n = try file.write(&buff);
+            std.debug.assert(n == METADATA_SIZE);
+            file.close();
+        };
+
+        self.file = try cwd.openFile(self.path, .{ .mode = .read_write, .lock = .shared });
+        try self.file.seekTo(METADATA_SIZE);
+
+        while (true) {
+            const entry = self.readKeyValue() catch |err| {
+                if (err == error.EOF) {
+                    break;
+                } else {
+                    return err;
+                }
+            };
+            // TODO this should be done inside readKeyValue to avoid allocations
+            if (!entry.active) {
+                self.allocator.free(entry.key);
+                continue;
+            }
+            // TODO add owned keys to list
+            _ = try self.tree.insert(entry.key, .{
+                .owned = true,
+                .pos = entry.pos,
+                .size = entry.value_size,
+            });
+        }
+        // TODO inside the config it could be saved the gc_prev_pos
+        // set gc_prev_pos
+        self.gc_data.prev_pos.store(try self.file.getEndPos(), .seq_cst);
+    }
+
+    pub fn insert(self: *DB, key: cstr, value: bytes) !void {
+        const entry = try self.append(key, value);
+
+        // TODO for a more robust system, diagnostic pattern comes great in this case
+        // self.gc_check() catch unreachable;
+
+        _ = try self.tree.insert(key, .{
+            .owned = false,
+            .size = entry.value_size,
+            .pos = entry.pos,
+        });
+    }
+
+    pub fn has(self: *DB, key: cstr) bool {
+        const result = self.tree.search(key);
+        return result == .found;
+    }
+
+    pub fn search(self: *DB, key: cstr) !?Owned(bytes) {
+        const result = self.tree.search(key);
+        return switch (result) {
+            .missing => null,
+            .found => |v| r: {
+                const dataptr = v.value;
+                try self.file.seekTo(dataptr.pos + 1);
+
+                var sizebuff: [8]u8 = undefined;
+                // TODO check that read 8 bytes
+                _ = try self.file.read(&sizebuff);
+                const size = std.mem.readInt(u64, &sizebuff, .little);
+
+                const value = try self.allocator.alloc(u8, size);
+                // TODO check that read all bytes
+                _ = try self.file.read(value);
+
+                break :r Owned(bytes).init(self.allocator, value);
+            },
+        };
+    }
+
+    pub fn delete(self: *DB, key: cstr) !void {
+        // TODO there is a race condition when the gc is running and there is a delete
+        // TODO this is because the delete is not an append operation, instead is an update.
+        // TODO to overcome this we should make a list of all delete operations that happen while
+        // TODO the gc was running
+        const result = try self.tree.delete(key);
+        switch (result) {
+            .found => |v| {
+                const dataptr = v.value;
+                try self.file.seekTo(dataptr.pos);
+                // set the active byte to false
+                _ = try self.file.write(&[_]u8{0});
+            },
+            .missing => {},
+        }
+    }
+
+    pub fn update(self: *DB, key: cstr, value: bytes) !void {
+        const result = self.tree.search(key);
+        if (result != .found) {
+            return;
+        }
+        if (value.len == result.found.value.size) {
+            // update in place on disk
+        } else {
+            // append to file and set previous key to inactive
+        }
+    }
+
+    /// reads a key value entry on the file on the current position
+    fn readKeyValue(self: *DB) !Entry {
+        const endPos = try self.file.getEndPos();
+
+        var result: Entry = undefined;
+        var key_size_buff: [8]u8 = undefined;
+        var key_size: u64 = undefined;
+        var active_buff: [1]u8 = undefined;
+        var value_size_buff: [8]u8 = undefined;
+
+        // read key size
+        var n = try self.file.read(&key_size_buff);
+        if (n == 0) {
+            return error.EOF;
+        }
+
+        key_size = std.mem.readInt(u64, &key_size_buff, .little);
+        std.debug.assert(key_size > 0 and key_size <= endPos);
+
+        result.key = try self.allocator.allocSentinel(u8, key_size, 0);
+        errdefer self.allocator.free(result.key);
+        // read key
+        n = try self.file.read(@constCast(result.key));
+        if (n == 0) {
+            return error.UnexpectedEOF;
+        }
+
+        result.pos = try self.file.getPos();
+        // read active
+        n = try self.file.read(&active_buff);
+        if (n == 0) {
+            return error.UnexpectedEOF;
+        }
+        result.active = active_buff[0] > 0;
+
+        // value size
+        n = try self.file.read(&value_size_buff);
+        if (n == 0) {
+            return error.UnexpectedEOF;
+        }
+
+        result.value_size = std.mem.readInt(u64, &value_size_buff, .little);
+        std.debug.assert(result.value_size > 0 and result.value_size <= endPos);
+
+        // move offset to end of value
+        try self.file.seekBy(@intCast(result.value_size));
+
+        return result;
+    }
+
+    /// append data to the end of the file
+    fn append(self: *DB, key: cstr, value: bytes) !Entry {
+        return DB._append(self.file, key, value);
+    }
+
+    fn _append(file: std.fs.File, key: cstr, value: bytes) !DB.Entry {
+        var result: DB.Entry = .{
+            .value_size = value.len,
+            .key = key,
+            .active = true,
+            .pos = undefined,
+        };
+
+        const end = try file.getEndPos();
+        try file.seekTo(end);
+
+        // write key size
+        var key_size: [8]u8 = undefined;
+        std.mem.writeInt(u64, &key_size, key.len, .little);
+        var n = try file.write(&key_size);
+        std.debug.assert(n == 8);
+
+        // write key
+        n = try file.write(key);
+        std.debug.assert(n == key.len);
+
+        result.pos = try file.getPos();
+        // write active byte
+        n = try file.write(&[_]u8{1});
+        std.debug.assert(n == 1);
+
+        // write value size
+        var value_size: [8]u8 = undefined;
+        std.mem.writeInt(u64, &value_size, value.len, .little);
+        n = try file.write(&value_size);
+        std.debug.assert(n == 8);
+
+        // write value
+        n = try file.write(value);
+        std.debug.assert(n == value.len);
+
+        return result;
+    }
+
+    fn gc_check(self: *DB) !void {
+        const end_pos = try self.file.getEndPos();
+        if (2 * self.gc_data.prev_pos.load(.seq_cst) > end_pos) {
+            return;
+        }
+        const gc_collecting = self.gc_data.collecting.fetchOr(1, .seq_cst);
+        if (gc_collecting == 1) {
+            return;
+        }
+        const thread = try std.Thread.spawn(.{}, DB.gc, .{self});
+        thread.detach();
+    }
+
+    // TODO implement the delete collection and substitution
+    fn gc(self: *DB) void {
+        const cwd = std.fs.cwd();
+
+        // TODO for a more robust system, diagnostic pattern maybe is a good choice in this case
+        defer _ = self.gc_data.collecting.store(0, .seq_cst);
+
+        var tempDir = utils.tempDir() catch unreachable;
+        defer tempDir.close();
+
+        const prefix_old = "rdb_old_";
+        const prefix_new = "rdb_new_";
+        var old_filename: [32]u8 = undefined;
+        var new_filename: [32]u8 = undefined;
+
+        @memcpy(old_filename[0..8], prefix_old);
+        var word = utils.randomWord(24);
+        @memcpy(old_filename[8..], word);
+
+        @memcpy(new_filename[0..8], prefix_new);
+        word = utils.randomWord(24);
+        @memcpy(new_filename[8..], word);
+
+        // TODO handle error
+        std.fs.cwd().copyFile(self.path, tempDir, &old_filename, .{}) catch unreachable;
+        defer tempDir.deleteFile(&old_filename) catch {};
+
+        const old_file = tempDir.openFile(&old_filename, .{}) catch unreachable;
+        const new_file = tempDir.createFile(&new_filename, .{}) catch unreachable;
+
+        // TODO delete old_file?
+        defer old_file.close();
+        // TODO delete new_file?
+        defer new_file.close();
+
+        // TODO handle error
+        reduce_file(old_file, new_file) catch unreachable;
+
+        // TODO apply file lock
+        const self_end = try self.file.getEndPos();
+        const old_end = try old_file.getEndPos();
+        if (self_end > old_end) {
+            const n = try self.file.copyRange(old_end, new_file, try new_file.getEndPos(), self_end - old_end);
+            assert(n == self_end - old_end, "expected {d} got {d}", .{ self_end - old_end, n });
+        }
+
+        self.file.close();
+        std.fs.cwd().deleteFile(self.path) catch unreachable;
+        try tempDir.copyFile(&new_filename, std.fs.cwd(), self.path, .{});
+
+        self.file = try cwd.openFile(self.path, .{ .mode = .read_write, .lock = .shared });
+    }
+
+    fn reduce_file(old_file: std.fs.File, new_file: std.fs.File) !void {
+        const old_end_pos = try old_file.getEndPos();
+
+        var n = try old_file.copyRange(0, new_file, 0, METADATA_SIZE);
+        assert(n == METADATA_SIZE, "expected {d} got {d}", .{ METADATA_SIZE, n });
+        try old_file.seekTo(METADATA_SIZE);
+
+        var old_pos: u64 = METADATA_SIZE;
+        var new_pos: u64 = METADATA_SIZE;
+        var size_buf: [8]u8 = undefined;
+        var size: u64 = undefined;
+        var active: [1]u8 = undefined;
+        while (old_pos < old_end_pos) {
+            var advanced: u64 = 0;
+
+            n = try old_file.read(&size_buf);
+            advanced += 8;
+            assert(n == 8, "expected 8 got {d}\n", .{n});
+
+            size = std.mem.readInt(u64, &size_buf, .little);
+            assert(size > 0 and size <= old_end_pos, "expected (0 < x < {d}) got {d}\n", .{ old_end_pos, size });
+            try old_file.seekBy(@intCast(size));
+            advanced += size;
+
+            n = try old_file.read(&active);
+            assert(n == 1, "expected 1 got {d}\n", .{n});
+            advanced += 1;
+
+            n = try old_file.read(&size_buf);
+            assert(n == 8, "expected 8 got {d}\n", .{n});
+            advanced += 8;
+            size = std.mem.readInt(u64, &size_buf, .little);
+            assert(size > 0 and size <= old_end_pos, "expected (0 < x < {d}) got {d}\n", .{ old_end_pos, size });
+            advanced += size;
+
+            if (active[0] > 0) {
+                // active true
+                n = try old_file.copyRange(old_pos, new_file, new_pos, advanced);
+                assert(n == advanced, "expected {d} got {d}\n", .{ advanced, n });
+                new_pos += n;
+            } else {
+                // active false
+            }
+            old_pos += advanced;
+            const currpos = try old_file.getPos();
+            assert(currpos + size == old_pos, "current pos + size {d} old_pos updated {d}\n", .{ currpos + size, old_pos });
+            try old_file.seekTo(old_pos);
+        }
+    }
+};
+
+test "insert-search" {
+    var db = try DB.init(std.testing.allocator, "insert-search_test_file");
+    defer db.deinit();
+    defer std.fs.cwd().deleteFile("insert-search_test_file") catch unreachable;
+
+    try db.insert("key1", "val1");
+    try db.insert("key2", "val1");
+    if (try db.search("key1")) |v| {
+        try std.testing.expectEqualDeep(v.value, "val1");
+        v.deinit();
+    } else {
+        return error.KeyNotFound;
+    }
+}
+
+test "fuzzy test writes" {
+    var db = try DB.init(std.testing.allocator, "temp_database_test_file");
+    defer db.deinit();
+    defer std.fs.cwd().deleteFile("temp_database_test_file") catch unreachable;
+
+    const now = std.time.microTimestamp();
+
+    var DefaultPrng = std.Random.DefaultPrng.init(blk: {
+        var seed: u64 = undefined;
+        try std.posix.getrandom(std.mem.asBytes(&seed));
+        std.debug.print("seed {d}\n", .{seed});
+        break :blk seed;
+    });
+    const rand = DefaultPrng.random();
+
+    const Values = struct {
+        key: std.ArrayList(u8) = std.ArrayList(u8).init(std.testing.allocator),
+        val: std.ArrayList(u8) = std.ArrayList(u8).init(std.testing.allocator),
+    };
+    var vals = std.ArrayList(Values).init(std.testing.allocator);
+    defer vals.deinit();
+    defer {
+        for (vals.items) |v| {
+            v.key.deinit();
+            v.val.deinit();
+        }
+    }
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const arenaA = arena.allocator();
+
+    for (0..10000) |_| {
+        const key = try arenaA.alloc(u8, 31);
+        key[30] = 0;
+        @memcpy(key[0..30], utils.createRandomWordZ(30, rand));
+        const value = try arenaA.alloc(u8, 30);
+        @memcpy(value, utils.createRandomWord(30, rand));
+
+        try db.insert(key[0..30 :0], value);
+
+        var keyA = std.ArrayList(u8).init(std.testing.allocator);
+        try keyA.appendSlice(key);
+
+        var valA = std.ArrayList(u8).init(std.testing.allocator);
+        try valA.appendSlice(value);
+        try vals.append(.{ .key = keyA, .val = valA });
+    }
+
+    for (vals.items, 0..) |v, index| {
+        const key: [:0]const u8 = v.key.items[0 .. v.key.items.len - 1 :0];
+        const actualN = try db.search(key);
+        if (actualN) |actual| {
+            try std.testing.expectEqualDeep(actual.value, v.val.items);
+            actual.deinit();
+        } else {
+            std.debug.print("key {s} not found index {d} searched key {s}\n", .{ v.key.items, index, key });
+            std.debug.print("is eql {}\n", .{std.mem.eql(u8, v.key.items, key)});
+            return error.KeyNotFound;
+        }
+    }
+
+    std.debug.print("elapsed {d} microseconds\n", .{std.time.microTimestamp() - now});
+}
+
+test "write file" {
+    var db = try DB.init(std.testing.allocator, "temp_database_test_file");
+    defer db.deinit();
+    defer std.fs.cwd().deleteFile("temp_database_test_file") catch unreachable;
+
+    try db.insert("key1", "val1");
+    try db.insert("key2", "val2");
+    try db.insert("key3", "val3");
+
+    const start_pos = METADATA_SIZE;
+    try db.file.seekTo(start_pos);
+    const keysize_key_length = 8 + 4;
+    const valsize_val_length = 1 + 8 + 4;
+
+    const entry1 = db.readKeyValue() catch |err| {
+        std.debug.print("read entry1 {}\n", .{err});
+        return err;
+    };
+    const entry2 = db.readKeyValue() catch |err| {
+        std.debug.print("read entry2 {}\n", .{err});
+        return err;
+    };
+    const entry3 = db.readKeyValue() catch |err| {
+        std.debug.print("read entry3 {}\n", .{err});
+        return err;
+    };
+    defer db.allocator.free(entry1.key);
+    defer db.allocator.free(entry2.key);
+    defer db.allocator.free(entry3.key);
+
+    try std.testing.expectEqualDeep(entry1.key, "key1");
+    const pos1 = start_pos + keysize_key_length;
+    try std.testing.expect(entry1.pos == pos1);
+    try std.testing.expect(entry1.value_size == 4);
+
+    try std.testing.expectEqualDeep(entry2.key, "key2");
+    const pos2 = pos1 + valsize_val_length + keysize_key_length;
+    try std.testing.expect(entry2.pos == pos2);
+    try std.testing.expect(entry2.value_size == 4);
+
+    try std.testing.expectEqualDeep(entry3.key, "key3");
+    const pos3 = pos2 + valsize_val_length + keysize_key_length;
+    try std.testing.expect(entry3.pos == pos3);
+    try std.testing.expect(entry3.value_size == 4);
+}
+
+test "reduce_file" {
+    var db = try DB.init(std.testing.allocator, "reduce_file_test_file");
+    defer db.deinit();
+    defer std.fs.cwd().deleteFile("reduce_file_test_file") catch unreachable;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const arenaA = arena.allocator();
+
+    var delete_list = [_]usize{ 2, 4, 5, 9, 21, 46, 43, 92, 77, 33, 41, 67 };
+    std.sort.heap(usize, &delete_list, {}, std.sort.asc(usize));
+    const S = struct {
+        fn order(context: void, lhs: usize, rhs: usize) std.math.Order {
+            _ = context;
+            return std.math.order(lhs, rhs);
+        }
+    };
+
+    for (0..100) |i| {
+        const key = try std.fmt.allocPrintZ(arenaA, "key{d}", .{i});
+        const value = try std.fmt.allocPrint(arenaA, "val{d}", .{i});
+
+        try db.insert(key, value);
+    }
+
+    for (delete_list) |i| {
+        const key = try std.fmt.allocPrintZ(arenaA, "key{d}", .{i});
+        try db.delete(key);
+    }
+
+    for (0..100) |i| {
+        const key = try std.fmt.allocPrintZ(arenaA, "key{d}", .{i});
+        const value = try std.fmt.allocPrint(arenaA, "val{d}", .{i});
+        const actual = try db.search(key);
+
+        if (std.sort.binarySearch(usize, i, &delete_list, {}, S.order) == null) {
+            std.testing.expect(actual != null) catch |err| {
+                std.debug.print("{s} not found\n", .{key});
+                return err;
+            };
+            defer actual.?.deinit();
+            try std.testing.expectEqualDeep(value, actual.?.value);
+        } else {
+            std.testing.expect(actual == null) catch |err| {
+                std.debug.print("{s} was found but should has been deleted\n", .{key});
+                return err;
+            };
+        }
+    }
+
+    const new_filepath = "new_reduce_file_test_file";
+    const new_file = try std.fs.cwd().createFile(new_filepath, .{});
+    defer std.fs.cwd().deleteFile(new_filepath) catch unreachable;
+
+    try DB.reduce_file(db.file, new_file);
+    new_file.close();
+
+    var db2 = try DB.init(std.testing.allocator, new_filepath);
+    defer db2.deinit();
+
+    for (0..100) |i| {
+        const key = try std.fmt.allocPrintZ(arenaA, "key{d}", .{i});
+        const value = try std.fmt.allocPrint(arenaA, "val{d}", .{i});
+        const actual = try db2.search(key);
+
+        if (std.sort.binarySearch(usize, i, &delete_list, {}, S.order) == null) {
+            std.testing.expect(actual != null) catch |err| {
+                std.debug.print("{s} not found\n", .{key});
+                return err;
+            };
+            defer actual.?.deinit();
+            try std.testing.expectEqualDeep(value, actual.?.value);
+        } else {
+            std.testing.expect(actual == null) catch |err| {
+                std.debug.print("{s} was found but should has been deleted\n", .{key});
+                return err;
+            };
+        }
+    }
+}
