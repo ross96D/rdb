@@ -475,6 +475,108 @@ test "fuzzy test writes" {
     std.debug.print("elapsed {d} microseconds\n", .{std.time.microTimestamp() - now});
 }
 
+// test "fuzzy parallel test writes" {
+//     var db = try DB.init(std.testing.allocator, "temp_database_test_file");
+//     defer db.deinit();
+//     defer std.fs.cwd().deleteFile("temp_database_test_file") catch unreachable;
+
+//     const now = std.time.microTimestamp();
+
+//     var DefaultPrng = std.Random.DefaultPrng.init(blk: {
+//         var seed: u64 = undefined;
+//         try std.posix.getrandom(std.mem.asBytes(&seed));
+//         std.debug.print("seed {d}\n", .{seed});
+//         break :blk seed;
+//     });
+//     const rand = DefaultPrng.random();
+
+//     const Values = struct {
+//         key: std.ArrayList(u8) = std.ArrayList(u8).init(std.testing.allocator),
+//         val: std.ArrayList(u8) = std.ArrayList(u8).init(std.testing.allocator),
+//     };
+//     var vals = std.ArrayList(Values).init(std.testing.allocator);
+//     defer vals.deinit();
+//     defer {
+//         for (vals.items) |v| {
+//             v.key.deinit();
+//             v.val.deinit();
+//         }
+//     }
+
+//     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+//     defer arena.deinit();
+//     const arenaA = arena.allocator();
+//     // std.ArrayList
+//     var mut = std.Thread.Mutex{};
+
+//     const insert = struct {
+//         fn insert(
+//             allocator: std.mem.Allocator,
+//             Rand: std.Random,
+//             Mut: *std.Thread.Mutex,
+//             Db: *DB,
+//             Vals: *std.ArrayList(Values),
+//             start: usize,
+//             end: usize,
+//         ) !void {
+//             for (start..end) |_| {
+//                 const key = try allocator.alloc(u8, 31);
+//                 key[30] = 0;
+//                 @memcpy(key[0..30], utils.createRandomWordZ(30, Rand));
+//                 const value = try allocator.alloc(u8, 30);
+//                 @memcpy(value, utils.createRandomWord(30, Rand));
+
+//                 try Db.insert(key[0..30 :0], value);
+
+//                 var keyA = std.ArrayList(u8).init(std.testing.allocator);
+//                 try keyA.appendSlice(key);
+
+//                 var valA = std.ArrayList(u8).init(std.testing.allocator);
+//                 try valA.appendSlice(value);
+//                 Mut.lock();
+//                 defer Mut.unlock();
+//                 try Vals.append(.{ .key = keyA, .val = valA });
+//             }
+//         }
+//     }.insert;
+
+//     const t0 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 0, 1000 });
+//     const t1 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 1000, 2000 });
+//     const t2 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 2000, 3000 });
+//     const t3 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 3000, 4000 });
+//     const t4 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 4000, 5000 });
+//     const t5 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 5000, 6000 });
+//     const t6 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 6000, 7000 });
+//     const t7 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 7000, 8000 });
+//     const t8 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 8000, 9000 });
+//     const t9 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 9000, 10000 });
+//     t0.join();
+//     t1.join();
+//     t2.join();
+//     t3.join();
+//     t4.join();
+//     t5.join();
+//     t6.join();
+//     t7.join();
+//     t8.join();
+//     t9.join();
+
+//     for (vals.items, 0..) |v, index| {
+//         const key: [:0]const u8 = v.key.items[0 .. v.key.items.len - 1 :0];
+//         const actualN = try db.search(key);
+//         if (actualN) |actual| {
+//             try std.testing.expectEqualDeep(actual.value, v.val.items);
+//             actual.deinit();
+//         } else {
+//             std.debug.print("key {s} not found index {d} searched key {s}\n", .{ v.key.items, index, key });
+//             std.debug.print("is eql {}\n", .{std.mem.eql(u8, v.key.items, key)});
+//             return error.KeyNotFound;
+//         }
+//     }
+
+//     std.debug.print("elapsed {d} microseconds\n", .{std.time.microTimestamp() - now});
+// }
+
 test "write file" {
     var db = try DB.init(std.testing.allocator, "temp_database_test_file");
     defer db.deinit();
