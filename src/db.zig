@@ -21,8 +21,15 @@ const METADATA_SIZE = 1 << 12;
 pub const DB = struct {
     path: bytes,
     allocator: std.mem.Allocator,
+
     tree: art.Art(DataPtr),
+    // TODO this mutex can be removed with a porting of the implementation of the
+    // TODO inmutable radix tree made by hashicorp https://github.com/hashicorp/go-immutable-radix
+    tree_mut: *std.Thread.Mutex,
+
     file: std.fs.File,
+    file_mut: *std.Thread.Mutex,
+
     gc_data: *GC,
 
     const GC = struct {
@@ -51,11 +58,20 @@ pub const DB = struct {
             .tree = tree,
             .file = undefined,
             .gc_data = undefined,
+            .file_mut = undefined,
+            .tree_mut = undefined,
         };
         errdefer db.deinit();
 
         db.gc_data = try db.allocator.create(GC);
         db.gc_data.* = GC{};
+
+        db.file_mut = try db.allocator.create(std.Thread.Mutex);
+        db.file_mut.* = .{};
+
+        db.tree_mut = try db.allocator.create(std.Thread.Mutex);
+        db.tree_mut.* = .{};
+
         // TODO add diagnostic for better error logging?
         try db.start();
         return db;
@@ -73,6 +89,8 @@ pub const DB = struct {
         _ = self.tree.iter(self, free_callback) catch {};
         self.tree.deinit();
         self.allocator.destroy(self.gc_data);
+        self.allocator.destroy(self.file_mut);
+        self.allocator.destroy(self.tree_mut);
     }
 
     noinline fn start(self: *DB) !void {
@@ -116,6 +134,9 @@ pub const DB = struct {
     }
 
     pub fn insert(self: *DB, key: cstr, value: bytes) !void {
+        self.tree_mut.lock();
+        defer self.tree_mut.unlock();
+
         const entry = try self.append(key, value);
 
         // TODO for a more robust system, diagnostic pattern comes great in this case
@@ -128,17 +149,20 @@ pub const DB = struct {
         });
     }
 
-    pub fn has(self: *DB, key: cstr) bool {
-        const result = self.tree.search(key);
-        return result == .found;
-    }
-
     pub fn search(self: *DB, key: cstr) !?Owned(bytes) {
+        self.tree_mut.lock();
         const result = self.tree.search(key);
+        self.tree_mut.unlock();
+
         return switch (result) {
             .missing => null,
             .found => |v| r: {
                 const dataptr = v.value;
+
+                // TODO get this into a single function
+                self.file_mut.lock();
+                defer self.file_mut.unlock();
+
                 try self.file.seekTo(dataptr.pos + 1);
 
                 var sizebuff: [8]u8 = undefined;
@@ -160,20 +184,34 @@ pub const DB = struct {
         // TODO this is because the delete is not an append operation, instead is an update.
         // TODO to overcome this we should make a list of all delete operations that happen while
         // TODO the gc was running
+        self.tree_mut.lock();
+        errdefer self.tree_mut.unlock();
         const result = try self.tree.delete(key);
+        self.tree_mut.unlock();
+
         switch (result) {
             .found => |v| {
                 const dataptr = v.value;
-                try self.file.seekTo(dataptr.pos);
-                // set the active byte to false
-                _ = try self.file.write(&[_]u8{0});
+                {
+                    // TODO get this into a single function
+                    self.file_mut.lock();
+                    defer self.file_mut.unlock();
+
+                    try self.file.seekTo(dataptr.pos);
+                    // set the active byte to false
+                    _ = try self.file.write(&[_]u8{0});
+                }
             },
             .missing => {},
         }
     }
 
     pub fn update(self: *DB, key: cstr, value: bytes) !void {
+        self.tree_mut.lock();
+        errdefer self.tree_mut.unlock();
         const result = self.tree.search(key);
+        self.tree_mut.unlock();
+
         if (result != .found) {
             return;
         }
@@ -186,6 +224,9 @@ pub const DB = struct {
 
     /// reads a key value entry on the file on the current position
     fn readKeyValue(self: *DB) !Entry {
+        self.file_mut.lock();
+        defer self.file_mut.unlock();
+
         const endPos = try self.file.getEndPos();
 
         var result: Entry = undefined;
@@ -236,6 +277,8 @@ pub const DB = struct {
 
     /// append data to the end of the file
     fn append(self: *DB, key: cstr, value: bytes) !Entry {
+        self.file_mut.lock();
+        defer self.file_mut.unlock();
         return DB._append(self.file, key, value);
     }
 
@@ -330,6 +373,9 @@ pub const DB = struct {
         reduce_file(old_file, new_file) catch unreachable;
 
         // TODO apply file lock
+        self.file_mut.lock();
+        defer self.file_mut.unlock();
+
         const self_end = try self.file.getEndPos();
         const old_end = try old_file.getEndPos();
         if (self_end > old_end) {
@@ -475,107 +521,116 @@ test "fuzzy test writes" {
     std.debug.print("elapsed {d} microseconds\n", .{std.time.microTimestamp() - now});
 }
 
-// test "fuzzy parallel test writes" {
-//     var db = try DB.init(std.testing.allocator, "temp_database_test_file");
-//     defer db.deinit();
-//     defer std.fs.cwd().deleteFile("temp_database_test_file") catch unreachable;
+pub const testing_allocator = allocator_instance.allocator();
+pub var allocator_instance = b: {
+    break :b std.heap.GeneralPurposeAllocator(.{ .safety = false, .thread_safe = true }){};
+};
 
-//     const now = std.time.microTimestamp();
+test "fuzzy parallel test writes" {
+    var db = try DB.init(testing_allocator, "temp_database_test_file");
+    defer db.deinit();
+    defer std.fs.cwd().deleteFile("temp_database_test_file") catch unreachable;
 
-//     var DefaultPrng = std.Random.DefaultPrng.init(blk: {
-//         var seed: u64 = undefined;
-//         try std.posix.getrandom(std.mem.asBytes(&seed));
-//         std.debug.print("seed {d}\n", .{seed});
-//         break :blk seed;
-//     });
-//     const rand = DefaultPrng.random();
+    const now = std.time.microTimestamp();
 
-//     const Values = struct {
-//         key: std.ArrayList(u8) = std.ArrayList(u8).init(std.testing.allocator),
-//         val: std.ArrayList(u8) = std.ArrayList(u8).init(std.testing.allocator),
-//     };
-//     var vals = std.ArrayList(Values).init(std.testing.allocator);
-//     defer vals.deinit();
-//     defer {
-//         for (vals.items) |v| {
-//             v.key.deinit();
-//             v.val.deinit();
-//         }
-//     }
+    var DefaultPrng = std.Random.DefaultPrng.init(blk: {
+        var seed: u64 = undefined;
+        try std.posix.getrandom(std.mem.asBytes(&seed));
+        std.debug.print("seed {d}\n", .{seed});
+        break :blk seed;
+    });
+    const rand = DefaultPrng.random();
 
-//     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-//     defer arena.deinit();
-//     const arenaA = arena.allocator();
-//     // std.ArrayList
-//     var mut = std.Thread.Mutex{};
+    const Values = struct {
+        key: std.ArrayList(u8) = std.ArrayList(u8).init(testing_allocator),
+        val: std.ArrayList(u8) = std.ArrayList(u8).init(testing_allocator),
+    };
+    var vals = std.ArrayList(Values).init(testing_allocator);
+    defer vals.deinit();
+    defer {
+        for (vals.items) |v| {
+            v.key.deinit();
+            v.val.deinit();
+        }
+    }
 
-//     const insert = struct {
-//         fn insert(
-//             allocator: std.mem.Allocator,
-//             Rand: std.Random,
-//             Mut: *std.Thread.Mutex,
-//             Db: *DB,
-//             Vals: *std.ArrayList(Values),
-//             start: usize,
-//             end: usize,
-//         ) !void {
-//             for (start..end) |_| {
-//                 const key = try allocator.alloc(u8, 31);
-//                 key[30] = 0;
-//                 @memcpy(key[0..30], utils.createRandomWordZ(30, Rand));
-//                 const value = try allocator.alloc(u8, 30);
-//                 @memcpy(value, utils.createRandomWord(30, Rand));
+    var arena = std.heap.ArenaAllocator.init(testing_allocator);
+    defer arena.deinit();
+    const arenaA = arena.allocator();
+    // std.ArrayList
+    var mut = std.Thread.Mutex{};
 
-//                 try Db.insert(key[0..30 :0], value);
+    const insert = struct {
+        fn insert(
+            allocator: std.mem.Allocator,
+            Rand: std.Random,
+            Mut: *std.Thread.Mutex,
+            Db: *DB,
+            Vals: *std.ArrayList(Values),
+            start: usize,
+            end: usize,
+        ) !void {
+            for (start..end) |_| {
+                Mut.lock();
+                const key = try allocator.alloc(u8, 31);
+                const value = try allocator.alloc(u8, 30);
+                Mut.unlock();
 
-//                 var keyA = std.ArrayList(u8).init(std.testing.allocator);
-//                 try keyA.appendSlice(key);
+                key[30] = 0;
+                @memcpy(key[0..30], utils.createRandomWordZ(30, Rand));
+                @memcpy(value, utils.createRandomWord(30, Rand));
 
-//                 var valA = std.ArrayList(u8).init(std.testing.allocator);
-//                 try valA.appendSlice(value);
-//                 Mut.lock();
-//                 defer Mut.unlock();
-//                 try Vals.append(.{ .key = keyA, .val = valA });
-//             }
-//         }
-//     }.insert;
+                try Db.insert(key[0..30 :0], value);
 
-//     const t0 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 0, 1000 });
-//     const t1 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 1000, 2000 });
-//     const t2 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 2000, 3000 });
-//     const t3 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 3000, 4000 });
-//     const t4 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 4000, 5000 });
-//     const t5 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 5000, 6000 });
-//     const t6 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 6000, 7000 });
-//     const t7 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 7000, 8000 });
-//     const t8 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 8000, 9000 });
-//     const t9 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 9000, 10000 });
-//     t0.join();
-//     t1.join();
-//     t2.join();
-//     t3.join();
-//     t4.join();
-//     t5.join();
-//     t6.join();
-//     t7.join();
-//     t8.join();
-//     t9.join();
+                var keyA = std.ArrayList(u8).init(testing_allocator);
+                try keyA.appendSlice(key);
 
-//     for (vals.items, 0..) |v, index| {
-//         const key: [:0]const u8 = v.key.items[0 .. v.key.items.len - 1 :0];
-//         const actualN = try db.search(key);
-//         if (actualN) |actual| {
-//             try std.testing.expectEqualDeep(actual.value, v.val.items);
-//             actual.deinit();
-//         } else {
-//             std.debug.print("key {s} not found index {d} searched key {s}\n", .{ v.key.items, index, key });
-//             std.debug.print("is eql {}\n", .{std.mem.eql(u8, v.key.items, key)});
-//             return error.KeyNotFound;
-//         }
-//     }
+                var valA = std.ArrayList(u8).init(testing_allocator);
+                try valA.appendSlice(value);
 
-//     std.debug.print("elapsed {d} microseconds\n", .{std.time.microTimestamp() - now});
-// }
+                Mut.lock();
+
+                try Vals.append(.{ .key = keyA, .val = valA });
+                Mut.unlock();
+            }
+        }
+    }.insert;
+
+    const t0 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 0, 1000 });
+    const t1 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 1000, 2000 });
+    const t2 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 2000, 3000 });
+    const t3 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 3000, 4000 });
+    const t4 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 4000, 5000 });
+    const t5 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 5000, 6000 });
+    const t6 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 6000, 7000 });
+    const t7 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 7000, 8000 });
+    const t8 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 8000, 9000 });
+    const t9 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 9000, 10000 });
+    t0.join();
+    t1.join();
+    t2.join();
+    t3.join();
+    t4.join();
+    t5.join();
+    t6.join();
+    t7.join();
+    t8.join();
+    t9.join();
+
+    for (vals.items, 0..) |v, index| {
+        const key: [:0]const u8 = v.key.items[0 .. v.key.items.len - 1 :0];
+        const actualN = try db.search(key);
+        if (actualN) |actual| {
+            try std.testing.expectEqualDeep(actual.value, v.val.items);
+            actual.deinit();
+        } else {
+            std.debug.print("key {s} not found index {d}\n", .{ v.key.items, index });
+            return error.KeyNotFound;
+        }
+    }
+
+    std.debug.print("parallel elapsed {d} microseconds\n", .{std.time.microTimestamp() - now});
+}
 
 test "write file" {
     var db = try DB.init(std.testing.allocator, "temp_database_test_file");
