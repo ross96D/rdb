@@ -138,7 +138,7 @@ pub const DB = struct {
         const entry = try self.append(key, value);
 
         // TODO for a more robust system, diagnostic pattern comes great in this case
-        // self.gc_check() catch unreachable;
+        self.gc_check() catch unreachable;
 
         _ = try self.tree.insert(key, .{
             .owned = false,
@@ -334,6 +334,11 @@ pub const DB = struct {
 
     // TODO implement the delete collection and substitution
     fn gc(self: *DB) void {
+        // TODO handle errors
+        _gc(self) catch {};
+    }
+
+    fn _gc(self: *DB) !void {
         const cwd = std.fs.cwd();
 
         // TODO for a more robust system, diagnostic pattern maybe is a good choice in this case
@@ -375,8 +380,13 @@ pub const DB = struct {
         const self_end = try self.file.getEndPos();
         const old_end = try old_file.getEndPos();
         if (self_end > old_end) {
-            const n = try self.file.copyRange(old_end, new_file, try new_file.getEndPos(), self_end - old_end);
-            assert(n == self_end - old_end, "expected {d} got {d}", .{ self_end - old_end, n });
+            const len = self_end - old_end;
+            var n: u64 = 0;
+            const new_end = try new_file.getEndPos();
+            while (n < len) {
+                n += try self.file.copyRange(old_end + n, new_file, new_end + n, len - n);
+            }
+            assert(n == self_end - old_end, "expected {d} got {d}\n", .{ self_end - old_end, n });
         }
 
         self.file.close();
@@ -384,6 +394,7 @@ pub const DB = struct {
         try tempDir.copyFile(&new_filename, std.fs.cwd(), self.path, .{});
 
         self.file = try cwd.openFile(self.path, .{ .mode = .read_write, .lock = .shared });
+        self.gc_data.prev_pos.store(try self.file.getEndPos(), .seq_cst);
     }
 
     fn reduce_file(old_file: std.fs.File, new_file: std.fs.File) !void {
