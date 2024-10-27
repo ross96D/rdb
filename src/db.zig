@@ -23,9 +23,7 @@ pub const DB = struct {
     allocator: std.mem.Allocator,
 
     tree: art.Art(DataPtr),
-    // TODO this mutex can be removed with a porting of the implementation of the
-    // TODO inmutable radix tree made by hashicorp https://github.com/hashicorp/go-immutable-radix
-    tree_mut: *std.Thread.Mutex,
+    tree_mut: *std.Thread.RwLock,
 
     file: std.fs.File,
     file_mut: *std.Thread.Mutex,
@@ -69,7 +67,7 @@ pub const DB = struct {
         db.file_mut = try db.allocator.create(std.Thread.Mutex);
         db.file_mut.* = .{};
 
-        db.tree_mut = try db.allocator.create(std.Thread.Mutex);
+        db.tree_mut = try db.allocator.create(std.Thread.RwLock);
         db.tree_mut.* = .{};
 
         // TODO add diagnostic for better error logging?
@@ -150,9 +148,9 @@ pub const DB = struct {
     }
 
     pub fn search(self: *DB, key: cstr) !?Owned(bytes) {
-        self.tree_mut.lock();
+        self.tree_mut.lockShared();
         const result = self.tree.search(key);
-        self.tree_mut.unlock();
+        self.tree_mut.unlockShared();
 
         return switch (result) {
             .missing => null,
@@ -207,10 +205,10 @@ pub const DB = struct {
     }
 
     pub fn update(self: *DB, key: cstr, value: bytes) !void {
-        self.tree_mut.lock();
+        self.tree_mut.lockShared();
         errdefer self.tree_mut.unlock();
         const result = self.tree.search(key);
-        self.tree_mut.unlock();
+        self.tree_mut.unlockShared();
 
         if (result != .found) {
             return;
