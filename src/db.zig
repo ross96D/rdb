@@ -361,16 +361,14 @@ pub const DB = struct {
 
         const old_file = tempDir.openFile(&old_filename, .{}) catch unreachable;
         const new_file = tempDir.createFile(&new_filename, .{}) catch unreachable;
+        defer tempDir.deleteFile(&new_filename) catch {};
 
-        // TODO delete old_file?
         defer old_file.close();
-        // TODO delete new_file?
         defer new_file.close();
 
         // TODO handle error
         reduce_file(old_file, new_file) catch unreachable;
 
-        // TODO apply file lock
         self.file_mut.lock();
         defer self.file_mut.unlock();
 
