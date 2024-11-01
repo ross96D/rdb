@@ -1,5 +1,6 @@
 // TODO track if there is a delete before doing an logic noop gc
 // TODO after all is working we should track the file end to make gc_check faster
+// TODO in the case we need to improve locking performance i think the main bottleneck is on the gc lock
 
 const std = @import("std");
 const art = @import("art");
