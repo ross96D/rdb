@@ -7,7 +7,7 @@ const db = @import("db.zig");
 const global_allocator: std.mem.Allocator = allocator_instance.allocator();
 var allocator_instance = std.heap.GeneralPurposeAllocator(.{ .safety = false }){};
 
-const Result = extern struct {
+pub const Result = extern struct {
     database: ?*db.DB = null,
     err: ?[*:0]const u8 = null,
 };

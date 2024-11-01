@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) void {
     const art = b.dependency("art", .{});
 
     const lib = b.addStaticLibrary(.{
-        .name = "kvfast",
+        .name = "rdb",
         // In this case the main source file is merely a path, however, in more
         // complicated build scripts, this could be a generated file.
         .root_source_file = b.path("src/root.zig"),
@@ -26,11 +26,26 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     lib.root_module.addImport("art", art.module("art"));
-
-    // This declares intent for the library to be installed into the standard
-    // location when the user invokes the "install" step (the default step when
-    // running `zig build`).
     b.installArtifact(lib);
+    // _ = lib.getEmittedH();
+
+    const shared_lib = b.addStaticLibrary(.{
+        .name = "rdb",
+        // In this case the main source file is merely a path, however, in more
+        // complicated build scripts, this could be a generated file.
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    shared_lib.root_module.addImport("art", art.module("art"));
+    b.installArtifact(shared_lib);
+    _ = shared_lib.getEmittedH();
+
+    // const cache_root = b.cache_root.path orelse b.cache_root.join(b.allocator, &.{"."}) catch unreachable;
+    // std.fs.path.dirname(cache_root);
+    const install_file = b.addInstallFile(b.path(".zig-cache/rdb.h"), "lib/rdb.h");
+    install_file.step.dependOn(&shared_lib.step);
+    b.getInstallStep().dependOn(&install_file.step);
 
     const exe = b.addExecutable(.{
         .name = "kvfast",
