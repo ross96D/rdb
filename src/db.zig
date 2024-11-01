@@ -31,6 +31,7 @@ pub const DB = struct {
     tree: art.Art(DataPtr),
 
     file: std.fs.File,
+    file_end_pos: Atomic(u64),
 
     db_mut: *std.Thread.RwLock,
 
@@ -63,6 +64,7 @@ pub const DB = struct {
             .allocator = allocator,
             .tree = tree,
             .file = undefined,
+            .file_end_pos = undefined,
             .gc_data = undefined,
             .db_mut = undefined,
         };
@@ -115,6 +117,7 @@ pub const DB = struct {
         try _create_tree(self.allocator, self.file, &self.tree);
 
         // TODO inside the config it could be saved the gc_prev_pos
+        self.file_end_pos.store(try self.file.getEndPos(), .seq_cst);
         // set gc_prev_pos
         self.gc_data.prev_pos.store(try self.file.getEndPos(), .seq_cst);
     }
@@ -296,7 +299,9 @@ pub const DB = struct {
     fn append(self: *DB, key: cstr, value: bytes) !Entry {
         // self.db_mut.lock();
         // defer self.db_mut.unlock();
-        return DB._append(self.file, key, value);
+        const entry = DB._append(self.file, key, value);
+        self.file_end_pos.store(try self.file.getEndPos(), .seq_cst);
+        return entry;
     }
 
     /// caller must ensure sync access to the file
@@ -340,8 +345,9 @@ pub const DB = struct {
     }
 
     fn gc_check(self: *DB) !void {
-        const end_pos = try self.file.getEndPos();
-        if (true and end_pos < 2 * self.gc_data.prev_pos.load(.seq_cst)) {
+        const end_pos = self.file_end_pos.load(.seq_cst);
+        const gc_prev_pos = self.gc_data.prev_pos.load(.seq_cst);
+        if (end_pos < 2 * gc_prev_pos) {
             return;
         }
         const thread = try std.Thread.spawn(.{}, DB.gc, .{self});
