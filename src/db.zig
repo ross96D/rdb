@@ -362,11 +362,9 @@ pub const DB = struct {
         }
         self.gc_data.deleted = std.ArrayList(cstr).init(self.allocator);
         // TODO handle errors
-        var timer = std.time.Timer.start() catch unreachable;
         _gc(self) catch |err| {
             @panic(std.fmt.allocPrint(self.allocator, "{}", .{err}) catch unreachable);
         };
-        std.debug.print("{d} ms\n", .{timer.read() / 1000000});
     }
 
     fn _gc(self: *DB) !void {
