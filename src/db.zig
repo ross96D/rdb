@@ -99,8 +99,6 @@ pub const DB = struct {
     }
 
     fn start(self: *DB) !void {
-        std.debug.assert(!std.fs.path.isAbsolute(self.path));
-
         const cwd = std.fs.cwd();
         _ = cwd.statFile(self.path) catch {
             const file = try cwd.createFile(self.path, .{ .mode = 0o644 });
@@ -518,11 +516,11 @@ test "insert-search" {
     db.deinit();
 }
 
-test "fuzzy test writes" {
+fn fuzzy_writes(path: []const u8) !void {
     std.debug.print("fuzzy test writes\n", .{});
-    var db = try DB.init(testing_allocator, "temp_database_test_file");
+    var db = try DB.init(testing_allocator, path);
     defer db.deinit();
-    defer std.fs.cwd().deleteFile("temp_database_test_file") catch unreachable;
+    defer std.fs.cwd().deleteFile(path) catch unreachable;
 
     const now = std.time.microTimestamp();
 
@@ -587,6 +585,18 @@ test "fuzzy test writes" {
     }
 
     std.debug.print("elapsed {d} microseconds\n", .{std.time.microTimestamp() - now});
+}
+
+test "fuzzy test writes" {
+    try fuzzy_writes("temp_database_test_file");
+}
+
+test "fuzzy test writes with absoulute path" {
+    var arena = std.heap.ArenaAllocator.init(testing_allocator);
+    defer arena.deinit();
+    const path = try std.fs.cwd().realpathAlloc(arena.allocator(), ".");
+    const abs_path = try std.fs.path.join(arena.allocator(), &[_][]const u8{ path, "temp_database_test_file_abs" });
+    try fuzzy_writes(abs_path);
 }
 
 test "fuzzy parallel test writes" {
