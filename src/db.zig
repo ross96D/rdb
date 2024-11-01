@@ -1,6 +1,8 @@
-// TODO track if there is a delete before doing an logic noop gc
-// TODO after all is working we should track the file end to make gc_check faster
-// TODO in the case we need to improve locking performance i think the main bottleneck is on the gc lock
+// TODO Track if there is a delete before doing an logic noop gc
+// TODO After all is working we should track the file end to make gc_check faster
+// TODO In the case we need to improve locking performance i think the main bottleneck is on the gc lock
+// TODO To improve the cases where a fail occurs we need to implement a diagnostic pattern
+// TODO Check why the radix tree keeps a reference to the key string
 
 const std = @import("std");
 const art = @import("art");
