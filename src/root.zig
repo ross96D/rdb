@@ -65,8 +65,7 @@ pub export fn search(database: *db.DB, key: [*:0]const u8) Bytes {
 
 pub export fn insert(database: *db.DB, key: [*:0]const u8, value: Bytes) bool {
     const key_copy = copyCStrZ(global_allocator, key) catch unreachable;
-    // ! TODO fix: I am never freeing the key_copy
-    database.insert(key_copy, toSlice(value.ptr.?, value.len)) catch {
+    database.insert(key_copy, toSlice(value.ptr.?, value.len), .{ .own = true }) catch {
         // TODO handle error
         return false;
     };

@@ -146,7 +146,8 @@ pub const DB = struct {
         }
     }
 
-    pub fn insert(self: *DB, key: cstr, value: bytes) !void {
+    const InsertConfig = struct { own: bool = false };
+    pub fn insert(self: *DB, key: cstr, value: bytes, config: InsertConfig) !void {
         self.db_mut.lock();
         defer self.db_mut.unlock();
 
@@ -156,7 +157,7 @@ pub const DB = struct {
         self.gc_check() catch unreachable;
 
         _ = try self.tree.insert(key, .{
-            .owned = false,
+            .owned = config.own,
             .size = entry.value_size,
             .pos = entry.pos,
         });
@@ -506,15 +507,15 @@ pub const DB = struct {
 
 pub const testing_allocator = allocator_instance.allocator();
 pub var allocator_instance = b: {
-    break :b std.heap.GeneralPurposeAllocator(.{ .safety = false, .thread_safe = true }){};
+    break :b std.heap.GeneralPurposeAllocator(.{ .safety = true, .thread_safe = true }){};
 };
 
 test "insert-search" {
     var db = try DB.init(testing_allocator, "insert-search_test_file");
     defer std.fs.cwd().deleteFile("insert-search_test_file") catch unreachable;
 
-    try db.insert("key1", "val1");
-    try db.insert("key2", "val1");
+    try db.insert("key1", "val1", .{});
+    try db.insert("key2", "val1", .{});
     if (try db.search("key1")) |v| {
         try std.testing.expectEqualDeep(v.value, "val1");
         v.deinit();
@@ -564,7 +565,7 @@ fn fuzzy_writes(path: []const u8) !void {
         const value = try arenaA.alloc(u8, 30);
         @memcpy(value, utils.createRandomWord(30, rand));
 
-        try db.insert(key[0..30 :0], value);
+        try db.insert(key[0..30 :0], value, .{});
 
         if (rand.boolean()) {
             try db.delete(key[0..30 :0]);
@@ -661,7 +662,7 @@ test "fuzzy parallel test writes" {
                 @memcpy(key[0..30], utils.createRandomWordZ(30, Rand));
                 @memcpy(value, utils.createRandomWord(30, Rand));
 
-                try Db.insert(key[0..30 :0], value);
+                try Db.insert(key[0..30 :0], value, .{});
 
                 if (Rand.boolean()) {
                     try Db.delete(key[0..30 :0]);
@@ -722,9 +723,9 @@ test "write file" {
     defer std.fs.cwd().deleteFile("temp_database_test_file") catch unreachable;
     defer db.deinit();
 
-    try db.insert("key1", "val1");
-    try db.insert("key2", "val2");
-    try db.insert("key3", "val3");
+    try db.insert("key1", "val1", .{});
+    try db.insert("key2", "val2", .{});
+    try db.insert("key3", "val3", .{});
 
     const start_pos = METADATA_SIZE;
     try db.file.seekTo(start_pos);
@@ -768,10 +769,6 @@ test "reduce_file" {
     defer db.deinit();
     defer std.fs.cwd().deleteFile("reduce_file_test_file") catch unreachable;
 
-    var arena = std.heap.ArenaAllocator.init(testing_allocator);
-    defer arena.deinit();
-    const arenaA = arena.allocator();
-
     var delete_list = [_]usize{ 2, 4, 5, 9, 21, 46, 43, 92, 77, 33, 41, 67 };
     std.sort.heap(usize, &delete_list, {}, std.sort.asc(usize));
     const S = struct {
@@ -782,20 +779,24 @@ test "reduce_file" {
     };
 
     for (0..100) |i| {
-        const key = try std.fmt.allocPrintZ(arenaA, "key{d}", .{i});
-        const value = try std.fmt.allocPrint(arenaA, "val{d}", .{i});
+        const key = try std.fmt.allocPrintZ(testing_allocator, "key{d}", .{i});
+        const value = try std.fmt.allocPrint(testing_allocator, "val{d}", .{i});
 
-        try db.insert(key, value);
+        try db.insert(key, value, .{ .own = true });
     }
 
     for (delete_list) |i| {
-        const key = try std.fmt.allocPrintZ(arenaA, "key{d}", .{i});
+        const key = try std.fmt.allocPrintZ(testing_allocator, "key{d}", .{i});
         try db.delete(key);
+        testing_allocator.free(key);
     }
 
     for (0..100) |i| {
-        const key = try std.fmt.allocPrintZ(arenaA, "key{d}", .{i});
-        const value = try std.fmt.allocPrint(arenaA, "val{d}", .{i});
+        const key = try std.fmt.allocPrintZ(testing_allocator, "key{d}", .{i});
+        const value = try std.fmt.allocPrint(testing_allocator, "val{d}", .{i});
+        defer testing_allocator.free(key);
+        defer testing_allocator.free(value);
+
         const actual = try db.search(key);
 
         if (std.sort.binarySearch(usize, i, &delete_list, {}, S.order) == null) {
@@ -824,8 +825,10 @@ test "reduce_file" {
     defer db2.deinit();
 
     for (0..100) |i| {
-        const key = try std.fmt.allocPrintZ(arenaA, "key{d}", .{i});
-        const value = try std.fmt.allocPrint(arenaA, "val{d}", .{i});
+        const key = try std.fmt.allocPrintZ(testing_allocator, "key{d}", .{i});
+        const value = try std.fmt.allocPrint(testing_allocator, "val{d}", .{i});
+        defer testing_allocator.free(key);
+        defer testing_allocator.free(value);
         const actual = try db2.search(key);
 
         if (std.sort.binarySearch(usize, i, &delete_list, {}, S.order) == null) {
