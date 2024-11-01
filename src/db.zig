@@ -98,7 +98,7 @@ pub const DB = struct {
         self.tree.deinit();
     }
 
-    noinline fn start(self: *DB) !void {
+    fn start(self: *DB) !void {
         std.debug.assert(!std.fs.path.isAbsolute(self.path));
 
         const cwd = std.fs.cwd();
