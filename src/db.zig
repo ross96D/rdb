@@ -26,10 +26,8 @@ pub const DB = struct {
     allocator: std.mem.Allocator,
 
     tree: art.Art(DataPtr),
-    tree_mut: *std.Thread.RwLock,
 
     file: std.fs.File,
-    file_mut: *std.Thread.Mutex,
 
     db_mut: *std.Thread.RwLock,
 
@@ -63,20 +61,12 @@ pub const DB = struct {
             .tree = tree,
             .file = undefined,
             .gc_data = undefined,
-            .file_mut = undefined,
-            .tree_mut = undefined,
             .db_mut = undefined,
         };
         errdefer db.deinit();
 
         db.gc_data = try db.allocator.create(GC);
         db.gc_data.* = GC{};
-
-        db.file_mut = try db.allocator.create(std.Thread.Mutex);
-        db.file_mut.* = .{};
-
-        db.tree_mut = try db.allocator.create(std.Thread.RwLock);
-        db.tree_mut.* = .{};
 
         db.db_mut = try db.allocator.create(std.Thread.RwLock);
         db.db_mut.* = .{};
@@ -91,8 +81,6 @@ pub const DB = struct {
 
         self.tree_deinit();
         self.allocator.destroy(self.gc_data);
-        self.allocator.destroy(self.file_mut);
-        self.allocator.destroy(self.tree_mut);
         self.allocator.destroy(self.db_mut);
     }
 
@@ -155,11 +143,8 @@ pub const DB = struct {
     }
 
     pub fn insert(self: *DB, key: cstr, value: bytes) !void {
-        self.db_mut.lockShared();
-        defer self.db_mut.unlockShared();
-
-        self.tree_mut.lock();
-        defer self.tree_mut.unlock();
+        self.db_mut.lock();
+        defer self.db_mut.unlock();
 
         const entry = try self.append(key, value);
 
@@ -177,18 +162,12 @@ pub const DB = struct {
         self.db_mut.lockShared();
         defer self.db_mut.unlockShared();
 
-        self.tree_mut.lockShared();
         const result = self.tree.search(key);
-        self.tree_mut.unlockShared();
 
         return switch (result) {
             .missing => null,
             .found => |v| r: {
                 const dataptr = v.value;
-
-                // TODO get this into a single function
-                self.file_mut.lock();
-                defer self.file_mut.unlock();
 
                 try self.file.seekTo(dataptr.pos + 1);
 
@@ -207,22 +186,15 @@ pub const DB = struct {
     }
 
     pub fn delete(self: *DB, key: cstr) !void {
-        self.db_mut.lockShared();
-        defer self.db_mut.unlockShared();
+        self.db_mut.lock();
+        defer self.db_mut.unlock();
 
-        self.tree_mut.lock();
-        errdefer self.tree_mut.unlock();
         const result = try self.tree.delete(key);
-        self.tree_mut.unlock();
 
         switch (result) {
             .found => |v| {
                 const dataptr = v.value;
                 {
-                    // TODO get this into a single function
-                    self.file_mut.lock();
-                    defer self.file_mut.unlock();
-
                     try self.file.seekTo(dataptr.pos);
                     // set the active byte to false
                     _ = try self.file.write(&[_]u8{0});
@@ -238,13 +210,10 @@ pub const DB = struct {
     }
 
     pub fn update(self: *DB, key: cstr, value: bytes) !void {
-        self.db_mut.lockShared();
-        defer self.db_mut.unlockShared();
+        self.db_mut.lock();
+        defer self.db_mut.unlock();
 
-        self.tree_mut.lockShared();
-        errdefer self.tree_mut.unlock();
         const result = self.tree.search(key);
-        self.tree_mut.unlockShared();
 
         if (result != .found) {
             return;
@@ -324,8 +293,8 @@ pub const DB = struct {
 
     /// append data to the end of the file
     fn append(self: *DB, key: cstr, value: bytes) !Entry {
-        self.file_mut.lock();
-        defer self.file_mut.unlock();
+        // self.db_mut.lock();
+        // defer self.db_mut.unlock();
         return DB._append(self.file, key, value);
     }
 
@@ -429,8 +398,6 @@ pub const DB = struct {
         // TODO handle error
         try reduce_file(old_file, new_file);
 
-        self.file_mut.lock();
-        defer self.file_mut.unlock();
         self.db_mut.lock();
         defer self.db_mut.unlock();
 
@@ -621,115 +588,115 @@ test "fuzzy test writes" {
     std.debug.print("elapsed {d} microseconds\n", .{std.time.microTimestamp() - now});
 }
 
-// test "fuzzy parallel test writes" {
-//     var db = try DB.init(testing_allocator, "parallel_temp_database_test_file");
-//     defer std.fs.cwd().deleteFile("parallel_temp_database_test_file") catch unreachable;
-//     defer db.deinit();
+test "fuzzy parallel test writes" {
+    var db = try DB.init(testing_allocator, "parallel_temp_database_test_file");
+    defer std.fs.cwd().deleteFile("parallel_temp_database_test_file") catch unreachable;
+    defer db.deinit();
 
-//     const now = std.time.microTimestamp();
+    const now = std.time.microTimestamp();
 
-//     var DefaultPrng = std.Random.DefaultPrng.init(blk: {
-//         var seed: u64 = undefined;
-//         try std.posix.getrandom(std.mem.asBytes(&seed));
-//         std.debug.print("seed {d}\n", .{seed});
-//         break :blk seed;
-//     });
-//     const rand = DefaultPrng.random();
+    var DefaultPrng = std.Random.DefaultPrng.init(blk: {
+        var seed: u64 = undefined;
+        try std.posix.getrandom(std.mem.asBytes(&seed));
+        std.debug.print("seed {d}\n", .{seed});
+        break :blk seed;
+    });
+    const rand = DefaultPrng.random();
 
-//     const Values = struct {
-//         key: std.ArrayList(u8) = std.ArrayList(u8).init(testing_allocator),
-//         val: std.ArrayList(u8) = std.ArrayList(u8).init(testing_allocator),
-//     };
-//     var vals = std.ArrayList(Values).init(testing_allocator);
-//     defer vals.deinit();
-//     defer {
-//         for (vals.items) |v| {
-//             v.key.deinit();
-//             v.val.deinit();
-//         }
-//     }
+    const Values = struct {
+        key: std.ArrayList(u8) = std.ArrayList(u8).init(testing_allocator),
+        val: std.ArrayList(u8) = std.ArrayList(u8).init(testing_allocator),
+    };
+    var vals = std.ArrayList(Values).init(testing_allocator);
+    defer vals.deinit();
+    defer {
+        for (vals.items) |v| {
+            v.key.deinit();
+            v.val.deinit();
+        }
+    }
 
-//     var arena = std.heap.ArenaAllocator.init(testing_allocator);
-//     defer arena.deinit();
-//     const arenaA = arena.allocator();
-//     // std.ArrayList
-//     var mut = std.Thread.Mutex{};
+    var arena = std.heap.ArenaAllocator.init(testing_allocator);
+    defer arena.deinit();
+    const arenaA = arena.allocator();
+    // std.ArrayList
+    var mut = std.Thread.Mutex{};
 
-//     const insert = struct {
-//         fn insert(
-//             allocator: std.mem.Allocator,
-//             Rand: std.Random,
-//             Mut: *std.Thread.Mutex,
-//             Db: *DB,
-//             Vals: *std.ArrayList(Values),
-//             start: usize,
-//             end: usize,
-//         ) !void {
-//             for (start..end) |_| {
-//                 Mut.lock();
-//                 const key = try allocator.alloc(u8, 31);
-//                 const value = try allocator.alloc(u8, 30);
-//                 Mut.unlock();
+    const insert = struct {
+        fn insert(
+            allocator: std.mem.Allocator,
+            Rand: std.Random,
+            Mut: *std.Thread.Mutex,
+            Db: *DB,
+            Vals: *std.ArrayList(Values),
+            start: usize,
+            end: usize,
+        ) !void {
+            for (start..end) |_| {
+                Mut.lock();
+                const key = try allocator.alloc(u8, 31);
+                const value = try allocator.alloc(u8, 30);
+                Mut.unlock();
 
-//                 key[30] = 0;
-//                 @memcpy(key[0..30], utils.createRandomWordZ(30, Rand));
-//                 @memcpy(value, utils.createRandomWord(30, Rand));
+                key[30] = 0;
+                @memcpy(key[0..30], utils.createRandomWordZ(30, Rand));
+                @memcpy(value, utils.createRandomWord(30, Rand));
 
-//                 try Db.insert(key[0..30 :0], value);
+                try Db.insert(key[0..30 :0], value);
 
-//                 // if (Rand.boolean()) {
-//                 //     try Db.delete(key[0..30 :0]);
-//                 //     continue;
-//                 // }
+                if (Rand.boolean()) {
+                    try Db.delete(key[0..30 :0]);
+                    continue;
+                }
 
-//                 var keyA = std.ArrayList(u8).init(testing_allocator);
-//                 try keyA.appendSlice(key);
+                var keyA = std.ArrayList(u8).init(testing_allocator);
+                try keyA.appendSlice(key);
 
-//                 var valA = std.ArrayList(u8).init(testing_allocator);
-//                 try valA.appendSlice(value);
+                var valA = std.ArrayList(u8).init(testing_allocator);
+                try valA.appendSlice(value);
 
-//                 Mut.lock();
-//                 try Vals.append(.{ .key = keyA, .val = valA });
-//                 Mut.unlock();
-//             }
-//         }
-//     }.insert;
+                Mut.lock();
+                try Vals.append(.{ .key = keyA, .val = valA });
+                Mut.unlock();
+            }
+        }
+    }.insert;
 
-//     const t0 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 0, 1000 });
-//     const t1 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 1000, 2000 });
-//     const t2 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 2000, 3000 });
-//     const t3 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 3000, 4000 });
-//     const t4 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 4000, 5000 });
-//     const t5 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 5000, 6000 });
-//     const t6 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 6000, 7000 });
-//     const t7 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 7000, 8000 });
-//     const t8 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 8000, 9000 });
-//     const t9 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 9000, 10000 });
-//     t0.join();
-//     t1.join();
-//     t2.join();
-//     t3.join();
-//     t4.join();
-//     t5.join();
-//     t6.join();
-//     t7.join();
-//     t8.join();
-//     t9.join();
+    const t0 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 0, 1000 });
+    const t1 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 1000, 2000 });
+    const t2 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 2000, 3000 });
+    const t3 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 3000, 4000 });
+    const t4 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 4000, 5000 });
+    const t5 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 5000, 6000 });
+    const t6 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 6000, 7000 });
+    const t7 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 7000, 8000 });
+    const t8 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 8000, 9000 });
+    const t9 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 9000, 10000 });
+    t0.join();
+    t1.join();
+    t2.join();
+    t3.join();
+    t4.join();
+    t5.join();
+    t6.join();
+    t7.join();
+    t8.join();
+    t9.join();
 
-//     for (vals.items, 0..) |v, index| {
-//         const key: [:0]const u8 = v.key.items[0 .. v.key.items.len - 1 :0];
-//         const actualN = try db.search(key);
-//         if (actualN) |actual| {
-//             try std.testing.expectEqualDeep(actual.value, v.val.items);
-//             actual.deinit();
-//         } else {
-//             std.debug.print("key {s} not found index {d}\n", .{ v.key.items, index });
-//             return error.KeyNotFound;
-//         }
-//     }
+    for (vals.items, 0..) |v, index| {
+        const key: [:0]const u8 = v.key.items[0 .. v.key.items.len - 1 :0];
+        const actualN = try db.search(key);
+        if (actualN) |actual| {
+            try std.testing.expectEqualDeep(actual.value, v.val.items);
+            actual.deinit();
+        } else {
+            std.debug.print("key {s} not found index {d}\n", .{ v.key.items, index });
+            return error.KeyNotFound;
+        }
+    }
 
-//     std.debug.print("parallel elapsed {d} microseconds\n", .{std.time.microTimestamp() - now});
-// }
+    std.debug.print("parallel elapsed {d} microseconds\n", .{std.time.microTimestamp() - now});
+}
 
 test "write file" {
     var db = try DB.init(testing_allocator, "temp_database_test_file");
