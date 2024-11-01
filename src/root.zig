@@ -12,6 +12,13 @@ pub const Result = extern struct {
     err: ?[*:0]const u8 = null,
 };
 
+inline fn toSlice(ptr: [*]const u8, len: u64) []const u8 {
+    var resp: []const u8 = &[_]u8{};
+    resp.len = len;
+    resp.ptr = ptr;
+    return resp;
+}
+
 fn copyCStr(allocator: std.mem.Allocator, ptr: [*:0]const u8) ![]const u8 {
     const slice = std.mem.span(ptr);
     const copy_slice: []u8 = try allocator.alloc(u8, slice.len);
@@ -36,20 +43,39 @@ pub export fn create(path: [*:0]const u8) Result {
     return Result{ .database = database };
 }
 
-pub export fn insert(database: *db.DB, key: [*:0]const u8, value: [*:0]const u8) bool {
+pub const Bytes = extern struct {
+    ptr: ?[*]const u8 = null,
+    len: u64 = 0,
+};
+
+pub export fn search(database: *db.DB, key: [*:0]const u8) Bytes {
+    const _key: [:0]const u8 = std.mem.span(key);
+    const val = database.search(_key) catch {
+        return Bytes{};
+    };
+    if (val) |v| {
+        return Bytes{
+            .ptr = v.value.ptr,
+            .len = v.value.len,
+        };
+    } else {
+        return Bytes{};
+    }
+}
+
+pub export fn insert(database: *db.DB, key: [*:0]const u8, value: Bytes) bool {
     const key_copy = copyCStrZ(global_allocator, key) catch unreachable;
     // ! TODO fix: I am never freeing the key_copy
-    database.insert(key_copy, std.mem.span(value)) catch {
+    database.insert(key_copy, toSlice(value.ptr.?, value.len)) catch {
         // TODO handle error
         return false;
     };
     return true;
 }
 
-pub export fn update(database: *db.DB, key: [*:0]const u8, value: [*:0]const u8) bool {
-    const key_copy = copyCStrZ(global_allocator, key) catch unreachable;
-    defer global_allocator.free(key_copy);
-    database.update(key_copy, std.mem.span(value)) catch {
+pub export fn update(database: *db.DB, key: [*:0]const u8, value: Bytes) bool {
+    const _key: [:0]const u8 = std.mem.span(key);
+    database.update(_key, toSlice(value.ptr.?, value.len)) catch {
         // TODO handle error
         return false;
     };
