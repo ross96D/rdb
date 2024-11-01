@@ -1,10 +1,10 @@
 ## Requirements
 
-- [ ] Mantain an in-memory list of all keys and his asociated pointer to the data on disk
-- [ ] Use a single file as the database
-- [ ] Work as an append only for fast writes
-- [ ] Create a size reducer mecanism to mantain a sane file size when severals inserts are made
-- [ ] Create a synchronization mecanism so only one operation per key is allowed
+- [x] Mantain an in-memory list of all keys and his asociated pointer to the data on disk
+- [x] Use a single file as the database
+- [x] Work as an append only for fast writes
+- [x] Create a size reducer mecanism to mantain a sane file size when severals inserts are made
+- [x] Create a synchronization mecanism so only one operation per key is allowed
 
 ## Maybe
 - [ ] Create a mecanism to know if the file is corrupted (something like having a hash)
