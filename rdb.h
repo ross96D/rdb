@@ -15,7 +15,7 @@ struct Bytes
 
 struct Result create(char* path);
 
-void close(void* db)
+void close(void* db);
 
 struct Bytes search(void* db, char* key);
 
