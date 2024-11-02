@@ -43,6 +43,10 @@ pub export fn create(path: [*:0]const u8) Result {
     return Result{ .database = database };
 }
 
+pub export fn close(database: *db.DB) void {
+    database.deinit();
+}
+
 pub const Bytes = extern struct {
     ptr: ?[*]const u8 = null,
     len: u64 = 0,
