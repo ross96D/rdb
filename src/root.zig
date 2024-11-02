@@ -74,11 +74,10 @@ pub export fn insert(database: *db.DB, key: [*:0]const u8, value: Bytes) bool {
 
 pub export fn update(database: *db.DB, key: [*:0]const u8, value: Bytes) bool {
     const _key: [:0]const u8 = std.mem.span(key);
-    database.update(_key, toSlice(value.ptr.?, value.len)) catch {
+    return database.update(_key, toSlice(value.ptr.?, value.len)) catch {
         // TODO handle error
         return false;
     };
-    return true;
 }
 
 pub export fn delete(database: *db.DB, key: [*:0]const u8) bool {

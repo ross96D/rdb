@@ -16,7 +16,7 @@ const Atomic = std.atomic.Value;
 const assert = struct {
     fn _assert(ok: bool, comptime fmt: []const u8, args: anytype) void {
         if (!ok) {
-            std.debug.print(fmt, args);
+            std.debug.print(fmt ++ "\n", args);
             std.debug.assert(ok);
         }
     }
@@ -214,20 +214,46 @@ pub const DB = struct {
         }
     }
 
-    pub fn update(self: *DB, key: cstr, value: bytes) !void {
+    pub fn update(self: *DB, key: cstr, value: bytes) !bool {
         self.db_mut.lock();
         defer self.db_mut.unlock();
 
         const result = self.tree.search(key);
 
         if (result != .found) {
-            return;
+            return false;
         }
-        if (value.len == result.found.value.size) {
-            // update in place on disk
+        const entry = result.found;
+
+        if (value.len == entry.value.size) {
+            var pos = entry.value.pos;
+            // pass the active byte
+            pos += 1;
+            // pass the value size
+            pos += 8;
+            try self.file.seekTo(pos);
+            const n = try self.file.write(value);
+            assert(n == value.len, "update value expected {d} got {d}", .{ value.len, n });
         } else {
-            // append to file and set previous key to inactive
+            const pos = entry.value.pos;
+            // remove older entry
+            try self.file.seekTo(pos);
+            std.debug.print("{d}\n", .{pos});
+            const n = try self.file.write(&[1]u8{0});
+            assert(n == 1, "expected 1 got {d}", .{n});
+
+            const new_entry = try self.append(key, value);
+
+            // TODO for a more robust system, diagnostic pattern comes great in this case
+            self.gc_check() catch unreachable;
+
+            _ = try self.tree.insert(key, .{
+                .owned = entry.value.owned,
+                .size = new_entry.value_size,
+                .pos = new_entry.pos,
+            });
         }
+        return true;
     }
 
     /// reads a key value entry on the file on the current position
@@ -298,8 +324,6 @@ pub const DB = struct {
 
     /// append data to the end of the file
     fn append(self: *DB, key: cstr, value: bytes) !Entry {
-        // self.db_mut.lock();
-        // defer self.db_mut.unlock();
         const entry = DB._append(self.file, key, value);
         self.file_end_pos.store(try self.file.getEndPos(), .seq_cst);
         return entry;
@@ -508,18 +532,42 @@ pub var allocator_instance = b: {
     break :b std.heap.GeneralPurposeAllocator(.{ .safety = true, .thread_safe = true }){};
 };
 
-test "insert-search" {
+test "insert-update-search" {
     var db = try DB.init(testing_allocator, "insert-search_test_file");
     defer std.fs.cwd().deleteFile("insert-search_test_file") catch unreachable;
 
     try db.insert("key1", "val1", .{});
-    try db.insert("key2", "val1", .{});
+    try db.insert("key2", "val2", .{});
     if (try db.search("key1")) |v| {
         try std.testing.expectEqualDeep(v.value, "val1");
         v.deinit();
     } else {
         return error.KeyNotFound;
     }
+    if (try db.search("key2")) |v| {
+        try std.testing.expectEqualDeep(v.value, "val2");
+        v.deinit();
+    } else {
+        return error.KeyNotFound;
+    }
+
+    const bk1 = try db.update("key1", "v1");
+    const bk2 = try db.update("key2", "v2");
+    try std.testing.expect(bk1);
+    try std.testing.expect(bk2);
+    if (try db.search("key1")) |v| {
+        try std.testing.expectEqualDeep(v.value, "v1");
+        v.deinit();
+    } else {
+        return error.KeyNotFound;
+    }
+    if (try db.search("key2")) |v| {
+        try std.testing.expectEqualDeep(v.value, "v2");
+        v.deinit();
+    } else {
+        return error.KeyNotFound;
+    }
+
     db.deinit();
 }
 
