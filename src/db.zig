@@ -527,11 +527,17 @@ pub const DB = struct {
     }
 };
 
-pub const testing_allocator = allocator_instance.allocator();
-pub var allocator_instance = b: {
-    break :b std.heap.GeneralPurposeAllocator(.{ .safety = true, .thread_safe = true }){};
-};
+const builtin = @import("builtin");
+const mode = builtin.mode;
+const jdz = @import("jdz_allocator");
 
+pub const testing_allocator = allocator_instance.allocator();
+var allocator_instance = switch (mode) {
+    .Debug => std.heap.GeneralPurposeAllocator(.{}),
+    .ReleaseFast => jdz.JdzAllocator(.{}).init(),
+    .ReleaseSmall => jdz.JdzAllocator(.{}).init(),
+    .ReleaseSafe => jdz.JdzAllocator(.{}).init(),
+};
 test "insert-update-search" {
     var db = try DB.init(testing_allocator, "insert-search_test_file");
     defer std.fs.cwd().deleteFile("insert-search_test_file") catch unreachable;

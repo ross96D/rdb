@@ -1,11 +1,18 @@
 const _root = @This();
 
 const std = @import("std");
-const builtin = @import("builtin");
 const db = @import("db.zig");
+const builtin = @import("builtin");
+const mode = builtin.mode;
+const jdz = @import("jdz_allocator");
 
 const global_allocator: std.mem.Allocator = allocator_instance.allocator();
-var allocator_instance = std.heap.GeneralPurposeAllocator(.{ .safety = false }){};
+var allocator_instance = switch (mode) {
+    .Debug => std.heap.GeneralPurposeAllocator(.{}){},
+    .ReleaseFast => jdz.JdzAllocator(.{}).init(),
+    .ReleaseSmall => jdz.JdzAllocator(.{}).init(),
+    .ReleaseSafe => jdz.JdzAllocator(.{}).init(),
+};
 
 pub const Result = extern struct {
     database: ?*db.DB = null,
