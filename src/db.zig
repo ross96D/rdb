@@ -146,21 +146,54 @@ pub const DB = struct {
         }
     }
 
-    const InsertConfig = struct { own: bool = false };
-    pub fn insert(self: *DB, key: cstr, value: bytes, config: InsertConfig) !void {
+    const SetConfig = struct { own: bool = false };
+    pub fn set(self: *DB, key: cstr, value: bytes, config: SetConfig) !void {
         self.db_mut.lock();
         defer self.db_mut.unlock();
 
-        const entry = try self.append(key, value);
+        const result = self.tree.search(key);
 
+        switch (result) {
+            .found => {
+                const entry = result.found;
+                if (value.len == entry.value.size) {
+                    return self._inplace_update(value, entry.value);
+                }
+                const pos = entry.value.pos;
+
+                // remove older entry
+                try self.file.seekTo(pos);
+                const n = try self.file.write(&[1]u8{0});
+                assert(n == 1, "expected 1 got {d}", .{n});
+
+                try _insert(self, key, value, config);
+            },
+            .missing => {
+                try _insert(self, key, value, config);
+            },
+        }
         // TODO for a more robust system, diagnostic pattern comes great in this case
-        self.gc_check() catch unreachable;
+        self.gc_check() catch {};
+    }
 
+    fn _insert(self: *DB, key: cstr, value: bytes, config: SetConfig) !void {
+        const entry = try self.append(key, value);
         _ = try self.tree.insert(key, .{
             .owned = config.own,
             .size = entry.value_size,
             .pos = entry.pos,
         });
+    }
+
+    fn _inplace_update(self: *DB, value: bytes, data: DataPtr) !void {
+        var pos = data.pos;
+        // pass the active byte
+        pos += 1;
+        // pass the value size
+        pos += 8;
+        try self.file.seekTo(pos);
+        const n = try self.file.write(value);
+        assert(n == value.len, "update value expected {d} got {d}", .{ value.len, n });
     }
 
     pub fn search(self: *DB, key: cstr) !?Owned(bytes) {
@@ -212,48 +245,6 @@ pub const DB = struct {
             },
             .missing => {},
         }
-    }
-
-    pub fn update(self: *DB, key: cstr, value: bytes) !bool {
-        self.db_mut.lock();
-        defer self.db_mut.unlock();
-
-        const result = self.tree.search(key);
-
-        if (result != .found) {
-            return false;
-        }
-        const entry = result.found;
-
-        if (value.len == entry.value.size) {
-            var pos = entry.value.pos;
-            // pass the active byte
-            pos += 1;
-            // pass the value size
-            pos += 8;
-            try self.file.seekTo(pos);
-            const n = try self.file.write(value);
-            assert(n == value.len, "update value expected {d} got {d}", .{ value.len, n });
-        } else {
-            const pos = entry.value.pos;
-            // remove older entry
-            try self.file.seekTo(pos);
-            std.debug.print("{d}\n", .{pos});
-            const n = try self.file.write(&[1]u8{0});
-            assert(n == 1, "expected 1 got {d}", .{n});
-
-            const new_entry = try self.append(key, value);
-
-            // TODO for a more robust system, diagnostic pattern comes great in this case
-            self.gc_check() catch unreachable;
-
-            _ = try self.tree.insert(key, .{
-                .owned = entry.value.owned,
-                .size = new_entry.value_size,
-                .pos = new_entry.pos,
-            });
-        }
-        return true;
     }
 
     /// reads a key value entry on the file on the current position
@@ -535,7 +526,7 @@ const jdz = @import("jdz_allocator");
 
 pub const testing_allocator = allocator_instance.allocator();
 var allocator_instance = switch (mode) {
-    .Debug => std.heap.GeneralPurposeAllocator(.{}),
+    .Debug => std.heap.GeneralPurposeAllocator(.{}){},
     .ReleaseFast => jdz.JdzAllocator(.{}).init(),
     .ReleaseSmall => jdz.JdzAllocator(.{}).init(),
     .ReleaseSafe => jdz.JdzAllocator(.{}).init(),
@@ -544,8 +535,8 @@ test "insert-update-search" {
     var db = try DB.init(testing_allocator, "insert-search_test_file");
     defer std.fs.cwd().deleteFile("insert-search_test_file") catch unreachable;
 
-    try db.insert("key1", "val1", .{});
-    try db.insert("key2", "val2", .{});
+    try db.set("key1", "val1", .{});
+    try db.set("key2", "val2", .{});
     if (try db.search("key1")) |v| {
         try std.testing.expectEqualDeep(v.value, "val1");
         v.deinit();
@@ -559,10 +550,8 @@ test "insert-update-search" {
         return error.KeyNotFound;
     }
 
-    const bk1 = try db.update("key1", "v1");
-    const bk2 = try db.update("key2", "v2");
-    try std.testing.expect(bk1);
-    try std.testing.expect(bk2);
+    try db.set("key1", "v1", .{});
+    try db.set("key2", "v2", .{});
     if (try db.search("key1")) |v| {
         try std.testing.expectEqualDeep(v.value, "v1");
         v.deinit();
@@ -619,7 +608,7 @@ fn fuzzy_writes(path: []const u8) !void {
         const value = try arenaA.alloc(u8, 30);
         @memcpy(value, utils.createRandomWord(30, rand));
 
-        try db.insert(key[0..30 :0], value, .{});
+        try db.set(key[0..30 :0], value, .{});
 
         if (rand.boolean()) {
             try db.delete(key[0..30 :0]);
@@ -716,7 +705,7 @@ test "fuzzy parallel test writes" {
                 @memcpy(key[0..30], utils.createRandomWordZ(30, Rand));
                 @memcpy(value, utils.createRandomWord(30, Rand));
 
-                try Db.insert(key[0..30 :0], value, .{});
+                try Db.set(key[0..30 :0], value, .{});
 
                 if (Rand.boolean()) {
                     try Db.delete(key[0..30 :0]);
@@ -777,9 +766,9 @@ test "write file" {
     defer std.fs.cwd().deleteFile("temp_database_test_file") catch unreachable;
     defer db.deinit();
 
-    try db.insert("key1", "val1", .{});
-    try db.insert("key2", "val2", .{});
-    try db.insert("key3", "val3", .{});
+    try db.set("key1", "val1", .{});
+    try db.set("key2", "val2", .{});
+    try db.set("key3", "val3", .{});
 
     const start_pos = METADATA_SIZE;
     try db.file.seekTo(start_pos);
@@ -836,7 +825,7 @@ test "reduce_file" {
         const key = try std.fmt.allocPrintZ(testing_allocator, "key{d}", .{i});
         const value = try std.fmt.allocPrint(testing_allocator, "val{d}", .{i});
 
-        try db.insert(key, value, .{ .own = true });
+        try db.set(key, value, .{ .own = true });
     }
 
     for (delete_list) |i| {

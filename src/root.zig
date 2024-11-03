@@ -74,21 +74,13 @@ pub export fn search(database: *db.DB, key: [*:0]const u8) Bytes {
     }
 }
 
-pub export fn insert(database: *db.DB, key: [*:0]const u8, value: Bytes) bool {
+pub export fn set(database: *db.DB, key: [*:0]const u8, value: Bytes) bool {
     const key_copy = copyCStrZ(global_allocator, key) catch unreachable;
-    database.insert(key_copy, toSlice(value.ptr.?, value.len), .{ .own = true }) catch {
+    database.set(key_copy, toSlice(value.ptr.?, value.len), .{ .own = true }) catch {
         // TODO handle error
         return false;
     };
     return true;
-}
-
-pub export fn update(database: *db.DB, key: [*:0]const u8, value: Bytes) bool {
-    const _key: [:0]const u8 = std.mem.span(key);
-    return database.update(_key, toSlice(value.ptr.?, value.len)) catch {
-        // TODO handle error
-        return false;
-    };
 }
 
 pub export fn delete(database: *db.DB, key: [*:0]const u8) bool {

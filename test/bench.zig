@@ -70,7 +70,7 @@ fn prepare() !void {
         defer allocator.free(key);
         defer allocator.free(value);
 
-        const v = rdb.insert(db, key, .{ .len = value.len, .ptr = value.ptr });
+        const v = rdb.set(db, key, .{ .len = value.len, .ptr = value.ptr });
         std.debug.assert(v);
     }
 }
