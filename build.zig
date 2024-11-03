@@ -4,25 +4,10 @@ const std = @import("std");
 // declaratively construct a build graph that will be executed by an external
 // runner.
 pub fn build(b: *std.Build) void {
-    // Standard target options allows the person running `zig build` to choose
-    // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native. Other options
-    // for restricting supported target set are available.
     const target = b.standardTargetOptions(.{});
-
-    // Standard optimization options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
-    // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const art = b.dependency("art", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const jdz_allocator = b.dependency("jdz_allocator", .{
-        .target = target,
-        .optimize = optimize,
-    });
+    const deps = dependencies(b, target, optimize);
 
     const lib = b.addStaticLibrary(.{
         .name = "rdb",
@@ -32,10 +17,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    lib.root_module.addImport("art", art.module("art"));
-    lib.root_module.addImport("jdz_allocator", jdz_allocator.module("jdz_allocator"));
+    for (deps) |dep| {
+        lib.root_module.addImport(dep.name, dep.dep.module(dep.name));
+    }
     b.installArtifact(lib);
-    // _ = lib.getEmittedH();
 
     const shared_lib = b.addStaticLibrary(.{
         .name = "rdb",
@@ -45,14 +30,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    shared_lib.root_module.addImport("art", art.module("art"));
-    shared_lib.root_module.addImport("jdz_allocator", jdz_allocator.module("jdz_allocator"));
+    for (deps) |dep| {
+        shared_lib.root_module.addImport(dep.name, dep.dep.module(dep.name));
+    }
 
     b.installArtifact(shared_lib);
     _ = shared_lib.getEmittedH();
 
-    // const cache_root = b.cache_root.path orelse b.cache_root.join(b.allocator, &.{"."}) catch unreachable;
-    // std.fs.path.dirname(cache_root);
     const install_file = b.addInstallFile(b.path(".zig-cache/rdb.h"), "lib/rdb.h");
     install_file.step.dependOn(&shared_lib.step);
     b.getInstallStep().dependOn(&install_file.step);
@@ -66,14 +50,62 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .filters = test_filters,
     });
-    lib_unit_tests.root_module.addImport("art", art.module("art"));
-    lib_unit_tests.root_module.addImport("jdz_allocator", jdz_allocator.module("jdz_allocator"));
+    for (deps) |dep| {
+        lib_unit_tests.root_module.addImport(dep.name, dep.dep.module(dep.name));
+    }
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
-    // Similar to creating the run step earlier, this exposes a `test` step to
-    // the `zig build --help` menu, providing a way for the user to request
-    // running the unit tests.
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
+
+    bench(b, lib, deps, target, optimize);
+}
+
+fn bench(
+    b: *std.Build,
+    rdb: *std.Build.Step.Compile,
+    deps: []const Dep,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) void {
+    const exe = b.addExecutable(.{
+        .name = "bench",
+        .root_source_file = b.path("test/bench.zig"),
+        .optimize = optimize,
+        .target = target,
+    });
+    for (deps) |dep| {
+        // // not add already added deps
+        // if (rdb.root_module.import_table.contains(dep.name)) {
+        //     continue;
+        // }
+        exe.root_module.addImport(dep.name, dep.dep.module(dep.name));
+    }
+    exe.root_module.addImport(rdb.name, &rdb.root_module);
+    b.installArtifact(exe);
+}
+
+const Dep = struct {
+    dep: *std.Build.Dependency,
+    name: []const u8,
+};
+
+inline fn dependencies(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) []const Dep {
+    const art = b.dependency("art", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const jdz_allocator = b.dependency("jdz_allocator", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    return &[_]Dep{
+        .{ .dep = art, .name = "art" },
+        .{ .dep = jdz_allocator, .name = "jdz_allocator" },
+    };
 }

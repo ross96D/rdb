@@ -520,8 +520,10 @@ pub const DB = struct {
                 // active false
             }
             old_pos += advanced;
-            const currpos = try old_file.getPos();
-            assert(currpos + size == old_pos, "current pos + size {d} old_pos updated {d}\n", .{ currpos + size, old_pos });
+            if (builtin.mode == .Debug) {
+                const currpos = try old_file.getPos();
+                assert(currpos + size == old_pos, "current pos + size {d} old_pos updated {d}\n", .{ currpos + size, old_pos });
+            }
             try old_file.seekTo(old_pos);
         }
     }
