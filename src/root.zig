@@ -19,6 +19,16 @@ pub const Result = extern struct {
     err: ?[*:0]const u8 = null,
 };
 
+pub const Bytes = extern struct {
+    ptr: [*]const u8,
+    len: u64,
+};
+
+pub const OptionalBytes = extern struct {
+    bytes: Bytes = undefined,
+    valid: bool = false,
+};
+
 inline fn toSlice(ptr: [*]const u8, len: u64) []const u8 {
     var resp: []const u8 = &[_]u8{};
     resp.len = len;
@@ -26,24 +36,10 @@ inline fn toSlice(ptr: [*]const u8, len: u64) []const u8 {
     return resp;
 }
 
-fn copyCStr(allocator: std.mem.Allocator, ptr: [*:0]const u8) ![]const u8 {
-    const slice = std.mem.span(ptr);
-    const copy_slice: []u8 = try allocator.alloc(u8, slice.len);
-    @memcpy(copy_slice, slice);
-    return copy_slice;
-}
-fn copyCStrZ(allocator: std.mem.Allocator, ptr: [*:0]const u8) ![:0]const u8 {
-    const slice = std.mem.span(ptr);
-    const copy_slice: [:0]u8 = try allocator.allocSentinel(u8, slice.len, 0);
-    @memcpy(copy_slice, slice);
-    return copy_slice;
-}
-
-pub export fn create(path: [*:0]const u8) Result {
+pub export fn create(path: Bytes) Result {
     const database = global_allocator.create(db.DB) catch unreachable;
 
-    const slice_path = copyCStr(global_allocator, path) catch unreachable;
-    database.* = db.DB.init(global_allocator, slice_path) catch |err| {
+    database.* = db.DB.init(global_allocator, toSlice(path.ptr, path.len)) catch |err| {
         const error_str = std.fmt.allocPrintZ(global_allocator, "{}", .{err}) catch unreachable;
         return Result{ .err = error_str.ptr };
     };
@@ -54,39 +50,33 @@ pub export fn close(database: *db.DB) void {
     database.deinit();
 }
 
-pub const Bytes = extern struct {
-    ptr: ?[*]const u8 = null,
-    len: u64 = 0,
-};
-
-pub export fn search(database: *db.DB, key: [*:0]const u8) Bytes {
-    const _key: [:0]const u8 = std.mem.span(key);
-    const val = database.search(_key) catch {
-        return Bytes{};
+pub export fn search(database: *db.DB, key: Bytes) OptionalBytes {
+    const val = database.search(toSlice(key.ptr, key.len)) catch {
+        return OptionalBytes{};
     };
     if (val) |v| {
-        return Bytes{
-            .ptr = v.value.ptr,
-            .len = v.value.len,
+        return OptionalBytes{
+            .bytes = .{
+                .ptr = v.value.ptr,
+                .len = v.value.len,
+            },
+            .valid = true,
         };
     } else {
-        return Bytes{};
+        return OptionalBytes{};
     }
 }
 
-pub export fn set(database: *db.DB, key: [*:0]const u8, value: Bytes) bool {
-    const key_copy = copyCStrZ(global_allocator, key) catch unreachable;
-    database.set(key_copy, toSlice(value.ptr.?, value.len), .{ .own = true }) catch {
+pub export fn set(database: *db.DB, key: Bytes, value: Bytes) bool {
+    database.set(toSlice(key.ptr, key.len), toSlice(value.ptr, value.len), .{ .own = true }) catch {
         // TODO handle error
         return false;
     };
     return true;
 }
 
-pub export fn delete(database: *db.DB, key: [*:0]const u8) bool {
-    const key_copy = copyCStrZ(global_allocator, key) catch unreachable;
-    defer global_allocator.free(key_copy);
-    database.delete(key_copy) catch {
+pub export fn remove(database: *db.DB, key: Bytes) bool {
+    database.delete(toSlice(key.ptr, key.len)) catch {
         // TODO handle error
         return false;
     };

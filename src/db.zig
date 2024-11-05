@@ -10,7 +10,6 @@ const utils = @import("utils.zig");
 
 const Owned = utils.Owned;
 const bytes = []const u8;
-const cstr = [:0]const u8;
 const Atomic = std.atomic.Value;
 
 const assert = struct {
@@ -40,7 +39,7 @@ pub const DB = struct {
     const GC = struct {
         prev_pos: Atomic(u64) = Atomic(u64).init(0),
         collecting: std.Thread.Mutex = .{},
-        deleted: ?std.ArrayList(cstr) = null,
+        deleted: ?std.ArrayList(bytes) = null,
     };
 
     const DataPtr = struct {
@@ -50,7 +49,7 @@ pub const DB = struct {
     };
 
     const Entry = struct {
-        key: [:0]const u8,
+        key: []const u8,
         value: []const u8 = undefined,
         value_size: u64,
         pos: u64,
@@ -138,7 +137,7 @@ pub const DB = struct {
     }
 
     const SetConfig = struct { own: bool = false };
-    pub fn set(self: *DB, key: cstr, value: bytes, config: SetConfig) !void {
+    pub fn set(self: *DB, key: bytes, value: bytes, config: SetConfig) !void {
         self.db_mut.lock();
         defer self.db_mut.unlock();
 
@@ -164,7 +163,7 @@ pub const DB = struct {
         self.gc_check() catch {};
     }
 
-    fn _insert(self: *DB, key: cstr, value: bytes, config: SetConfig) !void {
+    fn _insert(self: *DB, key: bytes, value: bytes, config: SetConfig) !void {
         const entry = try self.append(key, value);
         _ = self.tree.set(key, .{
             .owned = config.own,
@@ -184,7 +183,7 @@ pub const DB = struct {
         assert(n == value.len, "update value expected {d} got {d}", .{ value.len, n });
     }
 
-    pub fn search(self: *DB, key: cstr) !?Owned(bytes) {
+    pub fn search(self: *DB, key: bytes) !?Owned(bytes) {
         self.db_mut.lockShared();
         defer self.db_mut.unlockShared();
 
@@ -208,7 +207,7 @@ pub const DB = struct {
         return null;
     }
 
-    pub fn delete(self: *DB, key: cstr) !void {
+    pub fn delete(self: *DB, key: bytes) !void {
         self.db_mut.lock();
         defer self.db_mut.unlock();
 
@@ -254,7 +253,7 @@ pub const DB = struct {
         key_size = std.mem.readInt(u64, &key_size_buff, .little);
         std.debug.assert(key_size > 0 and key_size <= endPos);
 
-        result.key = try allocator.allocSentinel(u8, key_size, 0);
+        result.key = try allocator.alloc(u8, key_size);
         errdefer allocator.free(result.key);
         // read key
         n = try file.read(@constCast(result.key));
@@ -291,14 +290,14 @@ pub const DB = struct {
     }
 
     /// append data to the end of the file
-    fn append(self: *DB, key: cstr, value: bytes) !Entry {
+    fn append(self: *DB, key: bytes, value: bytes) !Entry {
         const entry = DB._append(self.file, key, value);
         self.file_end_pos.store(try self.file.getEndPos(), .seq_cst);
         return entry;
     }
 
     /// caller must ensure sync access to the file
-    fn _append(file: std.fs.File, key: cstr, value: bytes) !DB.Entry {
+    fn _append(file: std.fs.File, key: bytes, value: bytes) !DB.Entry {
         var result: DB.Entry = .{
             .value_size = value.len,
             .key = key,
@@ -352,7 +351,7 @@ pub const DB = struct {
         if (!self.gc_data.collecting.tryLock()) {
             return;
         }
-        self.gc_data.deleted = std.ArrayList(cstr).init(self.allocator);
+        self.gc_data.deleted = std.ArrayList(bytes).init(self.allocator);
         // TODO handle errors
         _gc(self) catch |err| {
             @panic(std.fmt.allocPrint(self.allocator, "{}", .{err}) catch unreachable);
@@ -361,7 +360,6 @@ pub const DB = struct {
 
     fn _gc(self: *DB) !void {
         // TODO for a more robust system, diagnostic pattern maybe is a good choice in this case
-
         const cwd = std.fs.cwd();
 
         defer self.gc_data.collecting.unlock();
@@ -375,13 +373,11 @@ pub const DB = struct {
         var new_filename: [32]u8 = undefined;
 
         @memcpy(old_filename[0..8], prefix_old);
-        var buff1: [24]u8 = undefined;
-        var word = utils.randomWord(24, &buff1);
+        var word = utils.randomWord(24);
         @memcpy(old_filename[8..], word);
 
         @memcpy(new_filename[0..8], prefix_new);
-        var buff2: [24]u8 = undefined;
-        word = utils.randomWord(24, &buff2);
+        word = utils.randomWord(24);
         @memcpy(new_filename[8..], word);
 
         // TODO handle error
@@ -562,7 +558,7 @@ fn fuzzy_writes(path: []const u8) !void {
         var seed: u64 = undefined;
         try std.posix.getrandom(std.mem.asBytes(&seed));
         std.debug.print("seed {d}\n", .{seed});
-        break :blk 8791951227279771970;
+        break :blk seed;
     });
     const rand = DefaultPrng.random();
 
@@ -579,36 +575,29 @@ fn fuzzy_writes(path: []const u8) !void {
         }
     }
 
-    var arena = std.heap.ArenaAllocator.init(testing_allocator);
-    defer arena.deinit();
-    const arenaA = arena.allocator();
-
     for (0..50_000) |_| {
-        const key = try arenaA.alloc(u8, 31);
-        key[30] = 0;
-        var buff1: [30:0]u8 = undefined;
-        @memcpy(key[0..30], utils.createRandomWordZ(30, &buff1, rand));
-        const value = try arenaA.alloc(u8, 30);
-        var buff2: [30]u8 = undefined;
-        @memcpy(value, utils.createRandomWord(30, &buff2, rand));
+        var key: [30]u8 = undefined;
+        @memcpy(&key, utils.createRandomWord(30, rand));
+        var value: [30]u8 = undefined;
+        @memcpy(&value, utils.createRandomWord(30, rand));
 
-        try db.set(key[0..30 :0], value, .{});
+        try db.set(&key, &value, .{});
 
         if (rand.boolean()) {
-            try db.delete(key[0..30 :0]);
+            try db.delete(&key);
             continue;
         }
 
         var keyA = std.ArrayList(u8).init(testing_allocator);
-        try keyA.appendSlice(key);
+        try keyA.appendSlice(&key);
 
         var valA = std.ArrayList(u8).init(testing_allocator);
-        try valA.appendSlice(value);
+        try valA.appendSlice(&value);
         try vals.append(.{ .key = keyA, .val = valA });
     }
 
     for (vals.items, 0..) |v, index| {
-        const key: [:0]const u8 = v.key.items[0 .. v.key.items.len - 1 :0];
+        const key: []const u8 = v.key.items;
         const actualN = try db.search(key);
         if (actualN) |actual| {
             try std.testing.expectEqualDeep(actual.value, v.val.items);
@@ -663,15 +652,11 @@ test "fuzzy parallel test writes" {
         }
     }
 
-    var arena = std.heap.ArenaAllocator.init(testing_allocator);
-    defer arena.deinit();
-    const arenaA = arena.allocator();
     // std.ArrayList
     var mut = std.Thread.Mutex{};
 
     const insert = struct {
         fn insert(
-            allocator: std.mem.Allocator,
             Rand: std.Random,
             Mut: *std.Thread.Mutex,
             Db: *DB,
@@ -680,29 +665,23 @@ test "fuzzy parallel test writes" {
             end: usize,
         ) !void {
             for (start..end) |_| {
-                Mut.lock();
-                const key = try allocator.alloc(u8, 31);
-                const value = try allocator.alloc(u8, 30);
-                Mut.unlock();
+                var key: [30]u8 = undefined;
+                var value: [30]u8 = undefined;
+                @memcpy(&key, utils.createRandomWordZ(30, Rand));
+                @memcpy(&value, utils.createRandomWord(30, Rand));
 
-                key[30] = 0;
-                var buff1: [30:0]u8 = undefined;
-                var buff2: [30]u8 = undefined;
-                @memcpy(key[0..30], utils.createRandomWordZ(30, &buff1, Rand));
-                @memcpy(value, utils.createRandomWord(30, &buff2, Rand));
-
-                try Db.set(key[0..30 :0], value, .{});
+                try Db.set(&key, &value, .{});
 
                 if (Rand.boolean()) {
-                    try Db.delete(key[0..30 :0]);
+                    try Db.delete(&key);
                     continue;
                 }
 
                 var keyA = std.ArrayList(u8).init(testing_allocator);
-                try keyA.appendSlice(key);
+                try keyA.appendSlice(&key);
 
                 var valA = std.ArrayList(u8).init(testing_allocator);
-                try valA.appendSlice(value);
+                try valA.appendSlice(&value);
 
                 Mut.lock();
                 try Vals.append(.{ .key = keyA, .val = valA });
@@ -711,16 +690,16 @@ test "fuzzy parallel test writes" {
         }
     }.insert;
 
-    const t0 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 0, 1000 });
-    const t1 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 1000, 2000 });
-    const t2 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 2000, 3000 });
-    const t3 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 3000, 4000 });
-    const t4 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 4000, 5000 });
-    const t5 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 5000, 6000 });
-    const t6 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 6000, 7000 });
-    const t7 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 7000, 8000 });
-    const t8 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 8000, 9000 });
-    const t9 = try std.Thread.spawn(.{}, insert, .{ arenaA, rand, &mut, &db, &vals, 9000, 10000 });
+    const t0 = try std.Thread.spawn(.{}, insert, .{ rand, &mut, &db, &vals, 0, 1000 });
+    const t1 = try std.Thread.spawn(.{}, insert, .{ rand, &mut, &db, &vals, 1000, 2000 });
+    const t2 = try std.Thread.spawn(.{}, insert, .{ rand, &mut, &db, &vals, 2000, 3000 });
+    const t3 = try std.Thread.spawn(.{}, insert, .{ rand, &mut, &db, &vals, 3000, 4000 });
+    const t4 = try std.Thread.spawn(.{}, insert, .{ rand, &mut, &db, &vals, 4000, 5000 });
+    const t5 = try std.Thread.spawn(.{}, insert, .{ rand, &mut, &db, &vals, 5000, 6000 });
+    const t6 = try std.Thread.spawn(.{}, insert, .{ rand, &mut, &db, &vals, 6000, 7000 });
+    const t7 = try std.Thread.spawn(.{}, insert, .{ rand, &mut, &db, &vals, 7000, 8000 });
+    const t8 = try std.Thread.spawn(.{}, insert, .{ rand, &mut, &db, &vals, 8000, 9000 });
+    const t9 = try std.Thread.spawn(.{}, insert, .{ rand, &mut, &db, &vals, 9000, 10000 });
     t0.join();
     t1.join();
     t2.join();
@@ -733,7 +712,7 @@ test "fuzzy parallel test writes" {
     t9.join();
 
     for (vals.items, 0..) |v, index| {
-        const key: [:0]const u8 = v.key.items[0 .. v.key.items.len - 1 :0];
+        const key: []const u8 = v.key.items;
         const actualN = try db.search(key);
         if (actualN) |actual| {
             try std.testing.expectEqualDeep(actual.value, v.val.items);

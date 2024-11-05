@@ -13,15 +13,21 @@ struct Bytes
     uint64_t len;
 };
 
-struct Result create(char* path);
+struct OptionalBytes
+{
+    struct Bytes bytes;
+    bool valid;
+};
+
+struct Result create(struct Bytes value);
 
 void close(void* db);
 
-struct Bytes search(void* db, char* key);
+struct OptionalBytes search(void* db, struct Bytes value);
 
-bool insert(void* db, char* key, struct Bytes value);
+bool insert(void* db, struct Bytes value, struct Bytes value);
 
-bool update(void* db, char* key, struct Bytes value);
+bool update(void* db, struct Bytes value, struct Bytes value);
 
-bool delete(void* db, char* key);
+bool remove(void* db, struct Bytes value);
 
