@@ -19,15 +19,13 @@ struct OptionalBytes
     bool valid;
 };
 
-struct Result create(struct Bytes value);
+struct Result open(struct Bytes path);
 
 void close(void* db);
 
-struct OptionalBytes search(void* db, struct Bytes value);
+struct OptionalBytes get(void* db, struct Bytes key);
 
-bool insert(void* db, struct Bytes value, struct Bytes value);
+bool set(void* db, struct Bytes key, struct Bytes value);
 
-bool update(void* db, struct Bytes value, struct Bytes value);
-
-bool remove(void* db, struct Bytes value);
+bool remove(void* db, struct Bytes key);
 

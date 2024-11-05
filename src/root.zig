@@ -36,7 +36,7 @@ inline fn toSlice(ptr: [*]const u8, len: u64) []const u8 {
     return resp;
 }
 
-pub export fn create(path: Bytes) Result {
+pub export fn open(path: Bytes) Result {
     const database = global_allocator.create(db.DB) catch unreachable;
 
     database.* = db.DB.init(global_allocator, toSlice(path.ptr, path.len)) catch |err| {
@@ -50,7 +50,7 @@ pub export fn close(database: *db.DB) void {
     database.deinit();
 }
 
-pub export fn search(database: *db.DB, key: Bytes) OptionalBytes {
+pub export fn get(database: *db.DB, key: Bytes) OptionalBytes {
     const val = database.search(toSlice(key.ptr, key.len)) catch {
         return OptionalBytes{};
     };

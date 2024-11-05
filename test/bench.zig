@@ -55,7 +55,7 @@ const dir = "test";
 fn prepare() !void {
     const path = try std.fs.path.join(allocator, &[_][]const u8{ dir, db_name });
     defer allocator.free(path);
-    const dbr = rdb.create(rdb.Bytes{ .ptr = path.ptr, .len = path.len });
+    const dbr = rdb.open(rdb.Bytes{ .ptr = path.ptr, .len = path.len });
     if (dbr.database == null) {
         const ss: []const u8 = std.mem.span(dbr.err.?);
         @panic(ss);
@@ -82,7 +82,7 @@ fn run() !void {
     const path = try std.fs.path.join(allocator, &[_][]const u8{ dir, db_name });
 
     const now = std.time.milliTimestamp();
-    const dbr = rdb.create(.{ .ptr = path.ptr, .len = path.len });
+    const dbr = rdb.open(.{ .ptr = path.ptr, .len = path.len });
     _ = dbr;
     std.debug.print("delay {d} ms\n", .{std.time.milliTimestamp() - now});
 }
