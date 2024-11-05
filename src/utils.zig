@@ -70,36 +70,33 @@ const chars = r: {
     break :r c;
 };
 
-pub inline fn randomWord(comptime size: usize) []const u8 {
+pub inline fn randomWord(comptime size: usize, word: *[size]u8) []const u8 {
     var DefaultPrng = std.Random.DefaultPrng.init(blk: {
         var seed: u64 = undefined;
         std.posix.getrandom(std.mem.asBytes(&seed)) catch unreachable;
         break :blk seed;
     });
-    return createRandomWord(size, DefaultPrng.random());
+    return createRandomWord(size, word, DefaultPrng.random());
 }
 
-pub inline fn randomWordZ(comptime size: usize) [:0]const u8 {
+pub inline fn randomWordZ(comptime size: usize, word: *[size:0]u8) [:0]const u8 {
     var DefaultPrng = std.Random.DefaultPrng.init(blk: {
         var seed: u64 = undefined;
         std.posix.getrandom(std.mem.asBytes(&seed)) catch unreachable;
         break :blk seed;
     });
-    return createRandomWordZ(size, DefaultPrng.random());
+    return createRandomWordZ(size, word, DefaultPrng.random());
 }
 
-pub inline fn createRandomWord(comptime size: usize, rand: std.Random) []const u8 {
-    var word: [size]u8 = undefined;
-
+pub inline fn createRandomWord(comptime size: usize, word: *[size]u8, rand: std.Random) []const u8 {
     for (0..size) |i| {
         const char_index = rand.intRangeLessThan(usize, 0, chars_size);
         word[i] = chars[char_index];
     }
-    return &word;
+    return word[0..];
 }
 
-pub inline fn createRandomWordZ(comptime size: usize, rand: std.Random) [:0]const u8 {
-    var word: [size:0]u8 = undefined;
+pub inline fn createRandomWordZ(comptime size: usize, word: *[size:0]u8, rand: std.Random) [:0]const u8 {
     word[size] = 0;
 
     for (0..size) |i| {
@@ -107,5 +104,5 @@ pub inline fn createRandomWordZ(comptime size: usize, rand: std.Random) [:0]cons
         word[i] = chars[char_index];
     }
 
-    return &word;
+    return word[0..];
 }

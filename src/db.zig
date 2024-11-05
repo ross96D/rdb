@@ -17,7 +17,7 @@ const assert = struct {
     fn _assert(ok: bool, comptime fmt: []const u8, args: anytype) void {
         if (!ok) {
             std.debug.print(fmt ++ "\n", args);
-            std.debug.assert(ok);
+            unreachable;
         }
     }
 }._assert;
@@ -258,7 +258,7 @@ pub const DB = struct {
         errdefer allocator.free(result.key);
         // read key
         n = try file.read(@constCast(result.key));
-        assert(n == result.key.len, "expected {d} got {d}", .{ result.key.len, n });
+        assert(n == result.key.len, "expected {d} got {d} curr {d} end {d}", .{ result.key.len, n, try file.getPos(), try file.getEndPos() });
 
         result.pos = try file.getPos();
         // read active
@@ -375,15 +375,19 @@ pub const DB = struct {
         var new_filename: [32]u8 = undefined;
 
         @memcpy(old_filename[0..8], prefix_old);
-        var word = utils.randomWord(24);
+        var buff1: [24]u8 = undefined;
+        var word = utils.randomWord(24, &buff1);
         @memcpy(old_filename[8..], word);
 
         @memcpy(new_filename[0..8], prefix_new);
-        word = utils.randomWord(24);
+        var buff2: [24]u8 = undefined;
+        word = utils.randomWord(24, &buff2);
         @memcpy(new_filename[8..], word);
 
         // TODO handle error
+        self.db_mut.lock();
         std.fs.cwd().copyFile(self.path, tempDir, &old_filename, .{}) catch unreachable;
+        self.db_mut.unlock();
         defer tempDir.deleteFile(&old_filename) catch {};
 
         const old_file = tempDir.openFile(&old_filename, .{}) catch unreachable;
@@ -461,7 +465,7 @@ pub const DB = struct {
 
             n = try old_file.read(&size_buf);
             advanced += 8;
-            assert(n == 8, "expected 8 got {d}\n", .{n});
+            assert(n == 8, "expected 8 got {d} curr {d} end {d}\n", .{ n, try old_file.getPos(), try old_file.getEndPos() });
 
             size = std.mem.readInt(u64, &size_buf, .little);
             assert(size > 0 and size <= old_end_pos, "expected (0 < x < {d}) got {d} old pos {d}\n", .{ old_end_pos, size, old_pos });
@@ -469,11 +473,11 @@ pub const DB = struct {
             advanced += size;
 
             n = try old_file.read(&active);
-            assert(n == 1, "expected 1 got {d}\n", .{n});
+            assert(n == 1, "expected 1 got {d} curr {d} end {d}\n", .{ n, try old_file.getPos(), try old_file.getEndPos() });
             advanced += 1;
 
             n = try old_file.read(&size_buf);
-            assert(n == 8, "expected 8 got {d}\n", .{n});
+            assert(n == 8, "expected 8 got {d} curr {d} end {d}\n", .{ n, try old_file.getPos(), try old_file.getEndPos() });
             advanced += 8;
             size = std.mem.readInt(u64, &size_buf, .little);
             assert(size > 0 and size <= old_end_pos, "expected (0 < x < {d}) got {d}\n", .{ old_end_pos, size });
@@ -481,6 +485,7 @@ pub const DB = struct {
 
             if (active[0] > 0) {
                 // active true
+                // this can write less than advanced TODO handle this case
                 n = try old_file.copyRange(old_pos, new_file, new_pos, advanced);
                 assert(n == advanced, "expected {d} got {d}\n", .{ advanced, n });
                 new_pos += n;
@@ -546,7 +551,7 @@ test "insert-update-search" {
 }
 
 fn fuzzy_writes(path: []const u8) !void {
-    std.debug.print("fuzzy test writes\n", .{});
+    std.debug.print("fuzzy test writes {s}\n", .{path});
     var db = try DB.init(testing_allocator, path);
     defer db.deinit();
     defer std.fs.cwd().deleteFile(path) catch unreachable;
@@ -557,7 +562,7 @@ fn fuzzy_writes(path: []const u8) !void {
         var seed: u64 = undefined;
         try std.posix.getrandom(std.mem.asBytes(&seed));
         std.debug.print("seed {d}\n", .{seed});
-        break :blk seed;
+        break :blk 8791951227279771970;
     });
     const rand = DefaultPrng.random();
 
@@ -578,12 +583,14 @@ fn fuzzy_writes(path: []const u8) !void {
     defer arena.deinit();
     const arenaA = arena.allocator();
 
-    for (0..10000) |_| {
+    for (0..50_000) |_| {
         const key = try arenaA.alloc(u8, 31);
         key[30] = 0;
-        @memcpy(key[0..30], utils.createRandomWordZ(30, rand));
+        var buff1: [30:0]u8 = undefined;
+        @memcpy(key[0..30], utils.createRandomWordZ(30, &buff1, rand));
         const value = try arenaA.alloc(u8, 30);
-        @memcpy(value, utils.createRandomWord(30, rand));
+        var buff2: [30]u8 = undefined;
+        @memcpy(value, utils.createRandomWord(30, &buff2, rand));
 
         try db.set(key[0..30 :0], value, .{});
 
@@ -617,7 +624,7 @@ fn fuzzy_writes(path: []const u8) !void {
 }
 
 test "fuzzy test writes" {
-    try fuzzy_writes("temp_database_test_file");
+    try fuzzy_writes("fuzzy_temp_database_test_file");
 }
 
 test "fuzzy test writes with absoulute path" {
@@ -679,8 +686,10 @@ test "fuzzy parallel test writes" {
                 Mut.unlock();
 
                 key[30] = 0;
-                @memcpy(key[0..30], utils.createRandomWordZ(30, Rand));
-                @memcpy(value, utils.createRandomWord(30, Rand));
+                var buff1: [30:0]u8 = undefined;
+                var buff2: [30]u8 = undefined;
+                @memcpy(key[0..30], utils.createRandomWordZ(30, &buff1, Rand));
+                @memcpy(value, utils.createRandomWord(30, &buff2, Rand));
 
                 try Db.set(key[0..30 :0], value, .{});
 
@@ -739,6 +748,7 @@ test "fuzzy parallel test writes" {
 }
 
 test "write file" {
+    std.debug.print("Write file test\n", .{});
     var db = try DB.init(testing_allocator, "temp_database_test_file");
     defer std.fs.cwd().deleteFile("temp_database_test_file") catch unreachable;
     defer db.deinit();
