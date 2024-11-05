@@ -5,7 +5,7 @@
 // TODO Check why the radix tree keeps a reference to the key string
 
 const std = @import("std");
-const art = @import("art");
+const zart = @import("zart");
 const utils = @import("utils.zig");
 
 const Owned = utils.Owned;
@@ -28,7 +28,7 @@ pub const DB = struct {
     path: bytes,
     allocator: std.mem.Allocator,
 
-    tree: art.Art(DataPtr),
+    tree: zart.Tree(DataPtr),
 
     file: std.fs.File,
     file_end_pos: Atomic(u64),
@@ -58,7 +58,7 @@ pub const DB = struct {
     };
 
     pub fn init(allocator: std.mem.Allocator, path: bytes) !DB {
-        const tree = art.Art(DataPtr).init(allocator);
+        const tree = zart.Tree(DataPtr).init(allocator);
         var db: DB = .{
             .path = path,
             .allocator = allocator,
@@ -90,15 +90,6 @@ pub const DB = struct {
     }
 
     fn tree_deinit(self: *DB) void {
-        const free_callback = struct {
-            fn f(node: *art.Art(DataPtr).Node, db: *DB, _: usize) !bool {
-                if (node.*.leaf.value.owned) {
-                    db.allocator.free(node.leaf.key);
-                }
-                return false;
-            }
-        }.f;
-        _ = self.tree.iter(self, free_callback) catch {};
         self.tree.deinit();
     }
 
@@ -122,7 +113,7 @@ pub const DB = struct {
         self.gc_data.prev_pos.store(try self.file.getEndPos(), .seq_cst);
     }
 
-    fn _create_tree(allocator: std.mem.Allocator, file: std.fs.File, tree: *art.Art(DataPtr)) !void {
+    fn _create_tree(allocator: std.mem.Allocator, file: std.fs.File, tree: *zart.Tree(DataPtr)) !void {
         try file.seekTo(METADATA_SIZE);
         while (true) {
             const entry = _read_key_value(allocator, file, false) catch |err| {
@@ -138,7 +129,7 @@ pub const DB = struct {
                 continue;
             }
             // TODO add owned keys to list
-            _ = try tree.insert(entry.key, .{
+            _ = tree.set(entry.key, .{
                 .owned = true,
                 .pos = entry.pos,
                 .size = entry.value_size,
@@ -151,26 +142,23 @@ pub const DB = struct {
         self.db_mut.lock();
         defer self.db_mut.unlock();
 
-        const result = self.tree.search(key);
+        const result = self.tree.get(key);
 
-        switch (result) {
-            .found => {
-                const entry = result.found;
-                if (value.len == entry.value.size) {
-                    return self._inplace_update(value, entry.value);
-                }
-                const pos = entry.value.pos;
+        if (result) |dataptr| {
+            // const entry = result.found;
+            if (value.len == dataptr.size) {
+                return self._inplace_update(value, dataptr);
+            }
+            const pos = dataptr.pos;
 
-                // remove older entry
-                try self.file.seekTo(pos);
-                const n = try self.file.write(&[1]u8{0});
-                assert(n == 1, "expected 1 got {d}", .{n});
+            // remove older entry
+            try self.file.seekTo(pos);
+            const n = try self.file.write(&[1]u8{0});
+            assert(n == 1, "expected 1 got {d}", .{n});
 
-                try _insert(self, key, value, config);
-            },
-            .missing => {
-                try _insert(self, key, value, config);
-            },
+            try _insert(self, key, value, config);
+        } else {
+            try _insert(self, key, value, config);
         }
         // TODO for a more robust system, diagnostic pattern comes great in this case
         self.gc_check() catch {};
@@ -178,7 +166,7 @@ pub const DB = struct {
 
     fn _insert(self: *DB, key: cstr, value: bytes, config: SetConfig) !void {
         const entry = try self.append(key, value);
-        _ = try self.tree.insert(key, .{
+        _ = self.tree.set(key, .{
             .owned = config.own,
             .size = entry.value_size,
             .pos = entry.pos,
@@ -200,50 +188,39 @@ pub const DB = struct {
         self.db_mut.lockShared();
         defer self.db_mut.unlockShared();
 
-        const result = self.tree.search(key);
+        const result = self.tree.get(key);
 
-        return switch (result) {
-            .missing => null,
-            .found => |v| r: {
-                const dataptr = v.value;
+        if (result) |dataptr| {
+            // const dataptr = v.value;
+            try self.file.seekTo(dataptr.pos + 1);
 
-                try self.file.seekTo(dataptr.pos + 1);
+            var sizebuff: [8]u8 = undefined;
+            // TODO check that read 8 bytes
+            _ = try self.file.read(&sizebuff);
+            const size = std.mem.readInt(u64, &sizebuff, .little);
 
-                var sizebuff: [8]u8 = undefined;
-                // TODO check that read 8 bytes
-                _ = try self.file.read(&sizebuff);
-                const size = std.mem.readInt(u64, &sizebuff, .little);
+            const value = try self.allocator.alloc(u8, size);
+            // TODO check that read all bytes
+            _ = try self.file.read(value);
 
-                const value = try self.allocator.alloc(u8, size);
-                // TODO check that read all bytes
-                _ = try self.file.read(value);
-
-                break :r Owned(bytes).init(self.allocator, value);
-            },
-        };
+            return Owned(bytes).init(self.allocator, value);
+        }
+        return null;
     }
 
     pub fn delete(self: *DB, key: cstr) !void {
         self.db_mut.lock();
         defer self.db_mut.unlock();
 
-        const result = try self.tree.delete(key);
+        const dataptr = self.tree.delete(key) orelse return;
 
-        switch (result) {
-            .found => |v| {
-                const dataptr = v.value;
-                {
-                    try self.file.seekTo(dataptr.pos);
-                    // set the active byte to false
-                    _ = try self.file.write(&[_]u8{0});
-                    if (self.gc_data.deleted) |*deleted| {
-                        // TODO there is a race condition when accessing the deleted list. should
-                        // TODO be behind a mutex
-                        deleted.append(key) catch unreachable;
-                    }
-                }
-            },
-            .missing => {},
+        try self.file.seekTo(dataptr.pos);
+        // set the active byte to false
+        _ = try self.file.write(&[_]u8{0});
+        if (self.gc_data.deleted) |*deleted| {
+            // TODO there is a race condition when accessing the deleted list. should
+            // TODO be behind a mutex
+            deleted.append(key) catch unreachable;
         }
     }
 
@@ -447,7 +424,7 @@ pub const DB = struct {
         self.gc_data.prev_pos.store(try self.file.getEndPos(), .seq_cst);
 
         // create tree
-        var tree = art.Art(DataPtr).init(self.allocator);
+        var tree = zart.Tree(DataPtr).init(self.allocator);
         try DB._create_tree(self.allocator, self.file, &tree);
         // change trees
         self.tree_deinit();
@@ -458,9 +435,9 @@ pub const DB = struct {
         self.gc_data.deleted = null;
 
         for (deleted.items) |key| {
-            const result = try self.tree.delete(key);
-            if (result == .found) {
-                try self.file.seekTo(result.found.value.pos);
+            const result = self.tree.delete(key);
+            if (result) |dataptr| {
+                try self.file.seekTo(dataptr.pos);
                 // set the active byte to false
                 _ = try self.file.write(&[_]u8{0});
             }

@@ -11,10 +11,13 @@
     // Once all dependencies are fetched, `zig build` no longer requires
     // internet connectivity.
     .dependencies = .{
-        .art = .{ .path = "external/art" },
         .jdz_allocator = .{
             .url = "https://github.com/joadnacer/jdz_allocator/archive/ea14e0efc3328a6b9e7dd53bb91b9eec2efe3f96.tar.gz",
             .hash = "12205353c7f550b1aadf245d70a30d5a0a92eb151f735e15358ff35fcfe53343c93f",
+        },
+        .zart = .{
+            .url = "https://github.com/ross96D/zart/archive/refs/tags/v0.0.4.tar.gz",
+            .hash = "1220035220b5110c2ebdd2830cc120aa7cd4991c95831ad50f66813fe1b6aa21bd5f",
         },
     },
 

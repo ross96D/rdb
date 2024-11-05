@@ -96,16 +96,16 @@ inline fn dependencies(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) []const Dep {
-    const art = b.dependency("art", .{
-        .target = target,
-        .optimize = optimize,
-    });
     const jdz_allocator = b.dependency("jdz_allocator", .{
         .target = target,
         .optimize = optimize,
     });
+    const zart = b.dependency("zart", .{
+        .target = target,
+        .optimize = optimize,
+    });
     return &[_]Dep{
-        .{ .dep = art, .name = "art" },
         .{ .dep = jdz_allocator, .name = "jdz_allocator" },
+        .{ .dep = zart, .name = "zart" },
     };
 }
