@@ -1,4 +1,4 @@
 # Summary
 key-value database, embeddable and single file only with in-memory keys that points to the value on disk.
 
-The database work like an append only file and to avoid a big files of invalid data (cada cierto tiempo se corre una tarea para borrar todos los datos invalidos y actualizar el arbol) 
+The database work always append to underlying file to avoid complexity and gain performance. This approach has the downside of accumulating garbage a background process is run from time to time to cleanup the garbage
