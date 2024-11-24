@@ -20,6 +20,25 @@ const assert = struct {
     }
 }._assert;
 
+pub const Scope = enum {
+    ReduceFile,
+    GC,
+
+    pub fn get(self: Scope) @Type(.EnumLiteral) {
+        const all = comptime &[_]@Type(.EnumLiteral){ .ReduceFile, .GC };
+        for (all) |a| {
+            if (std.mem.eql(u8, @tagName(a), @tagName(self))) {
+                return a;
+            }
+        }
+        @compileError("scope not found on literals " ++ @tagName(self));
+    }
+
+    pub fn log(self: Scope) type {
+        return std.log.scoped(self.get());
+    }
+};
+
 const METADATA_SIZE = 1 << 12;
 
 pub const DB = struct {
@@ -458,6 +477,8 @@ pub const DB = struct {
     }
 
     fn reduce_file(old_file: std.fs.File, new_file: std.fs.File) !void {
+        const log = Scope.log(.ReduceFile);
+
         const old_end_pos = try old_file.getEndPos();
 
         var n = try old_file.copyRange(0, new_file, 0, METADATA_SIZE);
@@ -470,27 +491,33 @@ pub const DB = struct {
         var size: u64 = undefined;
         var active: [1]u8 = undefined;
         while (old_pos < old_end_pos) {
+            log.debug("1 pos:{d} current: {d}", .{ old_pos, try old_file.getPos() });
             var advanced: u64 = 0;
 
             n = try old_file.read(&size_buf);
             advanced += 8;
             assert(n == 8, "expected 8 got {d} curr {d} end {d}\n", .{ n, try old_file.getPos(), try old_file.getEndPos() });
+            log.debug("2 pos:{d} current: {d}", .{ old_pos + advanced, try old_file.getPos() });
 
             size = std.mem.readInt(u64, &size_buf, .little);
             assert(size > 0 and size <= old_end_pos, "expected (0 < x < {d}) got {d} old pos {d}\n", .{ old_end_pos, size, old_pos });
             try old_file.seekBy(@intCast(size));
             advanced += size;
+            log.debug("3 pos:{d} current: {d}", .{ old_pos + advanced, try old_file.getPos() });
 
             n = try old_file.read(&active);
             assert(n == 1, "expected 1 got {d} curr {d} end {d}\n", .{ n, try old_file.getPos(), try old_file.getEndPos() });
             advanced += 1;
+            log.debug("4 pos:{d} current: {d}", .{ old_pos + advanced, try old_file.getPos() });
 
             n = try old_file.read(&size_buf);
             assert(n == 8, "expected 8 got {d} curr {d} end {d}\n", .{ n, try old_file.getPos(), try old_file.getEndPos() });
             advanced += 8;
+            log.debug("5 pos:{d} current: {d}", .{ old_pos + advanced, try old_file.getPos() });
             size = std.mem.readInt(u64, &size_buf, .little);
             assert(size > 0 and size <= old_end_pos, "expected (0 < x < {d}) got {d}\n", .{ old_end_pos, size });
             advanced += size;
+            log.debug("6 pos:{d} current: {d}", .{ old_pos + advanced, try old_file.getPos() + size });
 
             if (active[0] > 0) {
                 // active true
