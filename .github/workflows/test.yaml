@@ -10,7 +10,7 @@ jobs:
       - uses: mlugg/setup-zig@v1
         with:
           version: 0.13.0
-      - run: zig build test -Dtest-filter="reduce_file"
+      - run: zig build test
 
   test-linux:
     runs-on: ubuntu-latest
