@@ -518,9 +518,9 @@ const jdz = @import("jdz_allocator");
 pub const testing_allocator = allocator_instance.allocator();
 var allocator_instance = switch (mode) {
     .Debug => std.heap.GeneralPurposeAllocator(.{}){},
-    .ReleaseFast => jdz.JdzAllocator(.{}).init(),
-    .ReleaseSmall => jdz.JdzAllocator(.{}).init(),
-    .ReleaseSafe => jdz.JdzAllocator(.{}).init(),
+    .ReleaseFast => std.heap.GeneralPurposeAllocator(.{}){},
+    .ReleaseSmall => std.heap.GeneralPurposeAllocator(.{}){},
+    .ReleaseSafe => std.heap.GeneralPurposeAllocator(.{}){},
 };
 test "insert-update-search" {
     var db = try DB.init(testing_allocator, "insert-search_test_file");

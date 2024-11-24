@@ -9,9 +9,9 @@ const jdz = @import("jdz_allocator");
 const global_allocator: std.mem.Allocator = allocator_instance.allocator();
 var allocator_instance = switch (mode) {
     .Debug => std.heap.GeneralPurposeAllocator(.{}){},
-    .ReleaseFast => jdz.JdzAllocator(.{}).init(),
-    .ReleaseSmall => jdz.JdzAllocator(.{}).init(),
-    .ReleaseSafe => jdz.JdzAllocator(.{}).init(),
+    .ReleaseFast => std.heap.GeneralPurposeAllocator(.{}){},
+    .ReleaseSmall => std.heap.GeneralPurposeAllocator(.{}){},
+    .ReleaseSafe => std.heap.GeneralPurposeAllocator(.{}){},
 };
 
 pub const Result = extern struct {
