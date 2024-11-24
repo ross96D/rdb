@@ -1,5 +1,5 @@
 // TODO Create logging system similar to std.log.scoped but with out std_options dependency
-// TODO Create an action tracking system
+// TODO Create an action tracking system, contributes to the below TODO
 // TODO To improve the cases where a fail occurs we need to implement a diagnostic pattern
 
 const std = @import("std");
