@@ -229,13 +229,13 @@ pub const DB = struct {
             try self.file.seekTo(dataptr.pos + 1);
 
             var sizebuff: [8]u8 = undefined;
-            // TODO check that read 8 bytes
-            _ = try self.file.read(&sizebuff);
+            var n = try self.file.read(&sizebuff);
+            assert(n == 8, "expected 8 got {d}", .{n});
             const size = std.mem.readInt(u64, &sizebuff, .little);
 
             const value = try self.allocator.alloc(u8, size);
-            // TODO check that read all bytes
-            _ = try self.file.read(value);
+            n = try self.file.read(value);
+            assert(n == size, "expected {d} got {d}", .{ size, n });
 
             return Owned(bytes).init(self.allocator, value);
         }
@@ -380,7 +380,6 @@ pub const DB = struct {
         thread.detach();
     }
 
-    // TODO implement the delete collection and substitution
     fn gc(self: *DB) void {
         if (!self.gc_data.collecting.tryLock()) {
             return;
@@ -414,7 +413,6 @@ pub const DB = struct {
         word = utils.randomWord(24);
         @memcpy(new_filename[8..], word);
 
-        // TODO handle error
         self.db_mut.lock();
         std.fs.cwd().copyFile(self.path, tempDir, &old_filename, .{}) catch unreachable;
         self.db_mut.unlock();
