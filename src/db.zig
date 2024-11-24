@@ -1,3 +1,4 @@
+// TODO Create logging system similar to std.log.scoped but with out std_options dependency
 // TODO Track if there is a delete before doing an logic noop gc
 // TODO In the case we need to improve locking performance i think the main bottleneck is on the gc lock
 // TODO To improve the cases where a fail occurs we need to implement a diagnostic pattern
