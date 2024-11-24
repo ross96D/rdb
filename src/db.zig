@@ -1,6 +1,5 @@
 // TODO Create logging system similar to std.log.scoped but with out std_options dependency
 // TODO Create an action tracking system
-// TODO In the case we need to improve locking performance i think the main bottleneck is on the gc lock
 // TODO To improve the cases where a fail occurs we need to implement a diagnostic pattern
 
 const std = @import("std");
