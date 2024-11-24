@@ -1,5 +1,5 @@
 // TODO Create logging system similar to std.log.scoped but with out std_options dependency
-// TODO Track if there is a delete before doing an logic noop gc
+// TODO Create an action tracking system
 // TODO In the case we need to improve locking performance i think the main bottleneck is on the gc lock
 // TODO To improve the cases where a fail occurs we need to implement a diagnostic pattern
 
@@ -60,6 +60,7 @@ pub const DB = struct {
         collecting: std.Thread.Mutex = .{},
         _deleted: ?std.ArrayList(bytes) = null,
         _deleted_mut: std.Thread.Mutex = .{},
+        has_delete: Atomic(bool) = Atomic(bool).init(false),
 
         fn deleted(self: *GC) ?*std.ArrayList(bytes) {
             self._deleted_mut.lock();
@@ -247,6 +248,7 @@ pub const DB = struct {
         defer self.db_mut.unlock();
 
         const dataptr = self.tree.delete(key) orelse return;
+        self.gc_data.has_delete.store(true, .seq_cst);
 
         try self.file.seekTo(dataptr.pos);
         // set the active byte to false
@@ -372,7 +374,7 @@ pub const DB = struct {
     fn gc_check(self: *DB) !void {
         const end_pos = self.file_end_pos.load(.seq_cst);
         const gc_prev_pos = self.gc_data.prev_pos.load(.seq_cst);
-        if (end_pos < 2 * gc_prev_pos) {
+        if (end_pos < 2 * gc_prev_pos or !self.gc_data.has_delete.load(.seq_cst)) {
             return;
         }
         const thread = try std.Thread.spawn(.{}, DB.gc, .{self});
@@ -466,6 +468,7 @@ pub const DB = struct {
         const deleted = self.gc_data.deleted().?;
         defer deleted.deinit();
         self.gc_data.set_deleted(null);
+        self.gc_data.has_delete.store(false, .seq_cst);
 
         for (deleted.items) |key| {
             const result = self.tree.delete(key);
