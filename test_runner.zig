@@ -8,10 +8,24 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const Scope = @import("src/db.zig").Scope;
 
 const Allocator = std.mem.Allocator;
 
 const BORDER = "=" ** 80;
+
+pub const std_options: std.Options = switch (builtin.is_test) {
+    true => std.Options{
+        .log_level = .debug,
+        .log_scope_levels = &[_]std.log.ScopeLevel{
+            .{
+                .level = .debug,
+                .scope = Scope.ReduceFile.get(),
+            },
+        },
+    },
+    false => .{},
+};
 
 // use in custom panic handler
 var current_test: ?[]const u8 = null;
