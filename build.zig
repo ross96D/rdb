@@ -1,8 +1,5 @@
 const std = @import("std");
 
-// Although this function looks imperative, note that its job is to
-// declaratively construct a build graph that will be executed by an external
-// runner.
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -11,8 +8,6 @@ pub fn build(b: *std.Build) void {
 
     const lib = b.addStaticLibrary(.{
         .name = "rdb",
-        // In this case the main source file is merely a path, however, in more
-        // complicated build scripts, this could be a generated file.
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -24,8 +19,6 @@ pub fn build(b: *std.Build) void {
 
     const shared_lib = b.addStaticLibrary(.{
         .name = "rdb",
-        // In this case the main source file is merely a path, however, in more
-        // complicated build scripts, this could be a generated file.
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -49,6 +42,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .filters = test_filters,
+        // .sanitize_thread = true,
     });
     for (deps) |dep| {
         lib_unit_tests.root_module.addImport(dep.name, dep.dep.module(dep.name));

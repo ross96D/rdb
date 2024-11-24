@@ -46,7 +46,7 @@ pub export fn open(path: Bytes) Result {
     return Result{ .database = database };
 }
 
-pub export fn close(database: *db.DB) void {
+pub export fn close_(database: *db.DB) void {
     database.deinit();
 }
 

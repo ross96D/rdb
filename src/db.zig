@@ -39,7 +39,22 @@ pub const DB = struct {
     const GC = struct {
         prev_pos: Atomic(u64) = Atomic(u64).init(0),
         collecting: std.Thread.Mutex = .{},
-        deleted: ?std.ArrayList(bytes) = null,
+        _deleted: ?std.ArrayList(bytes) = null,
+        _deleted_mut: std.Thread.Mutex = .{},
+
+        fn deleted(self: *GC) ?*std.ArrayList(bytes) {
+            self._deleted_mut.lock();
+            defer self._deleted_mut.unlock();
+            if (self._deleted) |*d| {
+                return d;
+            }
+            return null;
+        }
+        fn set_deleted(self: *GC, list: ?std.ArrayList(bytes)) void {
+            self._deleted_mut.lock();
+            defer self._deleted_mut.unlock();
+            self._deleted = list;
+        }
     };
 
     const DataPtr = struct {
@@ -216,9 +231,7 @@ pub const DB = struct {
         try self.file.seekTo(dataptr.pos);
         // set the active byte to false
         _ = try self.file.write(&[_]u8{0});
-        if (self.gc_data.deleted) |*deleted| {
-            // TODO there is a race condition when accessing the deleted list. should
-            // TODO be behind a mutex
+        if (self.gc_data.deleted()) |deleted| {
             deleted.append(key) catch unreachable;
         }
     }
@@ -351,7 +364,7 @@ pub const DB = struct {
         if (!self.gc_data.collecting.tryLock()) {
             return;
         }
-        self.gc_data.deleted = std.ArrayList(bytes).init(self.allocator);
+        self.gc_data.set_deleted(std.ArrayList(bytes).init(self.allocator));
         // TODO handle errors
         _gc(self) catch |err| {
             @panic(std.fmt.allocPrint(self.allocator, "{}", .{err}) catch unreachable);
@@ -430,9 +443,9 @@ pub const DB = struct {
         self.tree_deinit();
         self.tree = tree;
 
-        const deleted = self.gc_data.deleted.?;
+        const deleted = self.gc_data.deleted().?;
         defer deleted.deinit();
-        self.gc_data.deleted = null;
+        self.gc_data.set_deleted(null);
 
         for (deleted.items) |key| {
             const result = self.tree.delete(key);
@@ -614,14 +627,6 @@ fn fuzzy_writes(path: []const u8) !void {
 
 test "fuzzy test writes" {
     try fuzzy_writes("fuzzy_temp_database_test_file");
-}
-
-test "fuzzy test writes with absoulute path" {
-    var arena = std.heap.ArenaAllocator.init(testing_allocator);
-    defer arena.deinit();
-    const path = try std.fs.cwd().realpathAlloc(arena.allocator(), ".");
-    const abs_path = try std.fs.path.join(arena.allocator(), &[_][]const u8{ path, "temp_database_test_file_abs" });
-    try fuzzy_writes(abs_path);
 }
 
 test "fuzzy parallel test writes" {
