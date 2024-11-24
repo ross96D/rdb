@@ -44,6 +44,7 @@ pub fn build(b: *std.Build) void {
     const sanitize_thread = b.option(bool, "sanitize_thread", "Enable Thread Sanitizer");
     const lib_unit_tests = b.addTest(.{
         .root_source_file = b.path("src/root.zig"),
+        .test_runner = b.path("test_runner.zig"),
         .target = target,
         .optimize = optimize,
         .filters = test_filters,
