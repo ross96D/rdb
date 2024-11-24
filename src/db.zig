@@ -3,6 +3,7 @@
 // TODO To improve the cases where a fail occurs we need to implement a diagnostic pattern
 
 const std = @import("std");
+const builtin = @import("builtin");
 const zart = @import("zart");
 const utils = @import("utils.zig");
 
@@ -108,7 +109,8 @@ pub const DB = struct {
     fn start(self: *DB) !void {
         const cwd = std.fs.cwd();
         _ = cwd.statFile(self.path) catch {
-            const file = try cwd.createFile(self.path, .{ .mode = 0o644 });
+            const _mode = if (builtin.os.tag == .windows) 0 else 0o644;
+            const file = try cwd.createFile(self.path, .{ .mode = _mode });
             const buff: [METADATA_SIZE]u8 = std.mem.zeroes([METADATA_SIZE]u8);
             const n = try file.write(&buff);
             std.debug.assert(n == METADATA_SIZE);
@@ -509,7 +511,6 @@ pub const DB = struct {
     }
 };
 
-const builtin = @import("builtin");
 const mode = builtin.mode;
 const jdz = @import("jdz_allocator");
 

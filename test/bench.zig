@@ -55,13 +55,13 @@ const dir = "test";
 fn prepare() !void {
     const path = try std.fs.path.join(allocator, &[_][]const u8{ dir, db_name });
     defer allocator.free(path);
-    const dbr = rdb.open(rdb.Bytes{ .ptr = path.ptr, .len = path.len });
+    const dbr = rdb.rdb_open(rdb.Bytes{ .ptr = path.ptr, .len = path.len });
     if (dbr.database == null) {
         const ss: []const u8 = std.mem.span(dbr.err.?);
         @panic(ss);
     }
     const db = dbr.database.?;
-    defer rdb.close(db);
+    defer rdb.rdb_close(db);
 
     for (0..1_000_000) |i| {
         const key = try std.fmt.allocPrint(allocator, "key{d}", .{i});
@@ -69,7 +69,7 @@ fn prepare() !void {
         defer allocator.free(key);
         defer allocator.free(value);
 
-        const v = rdb.set(
+        const v = rdb.rdb_set(
             db,
             .{ .len = key.len, .ptr = key.ptr },
             .{ .len = value.len, .ptr = value.ptr },
@@ -82,7 +82,7 @@ fn run() !void {
     const path = try std.fs.path.join(allocator, &[_][]const u8{ dir, db_name });
 
     const now = std.time.milliTimestamp();
-    const dbr = rdb.open(.{ .ptr = path.ptr, .len = path.len });
+    const dbr = rdb.rdb_open(.{ .ptr = path.ptr, .len = path.len });
     _ = dbr;
     std.debug.print("delay {d} ms\n", .{std.time.milliTimestamp() - now});
 }

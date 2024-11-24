@@ -109,10 +109,7 @@ inline fn dependencies(
         .optimize = optimize,
     });
     const win32: ?*std.Build.Dependency = if (target.result.os.tag == .windows)
-        b.dependency("win32", .{
-            .target = target,
-            .optimize = optimize,
-        })
+        b.dependency("win32", .{})
     else
         null;
 
