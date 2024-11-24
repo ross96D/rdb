@@ -522,7 +522,9 @@ pub const DB = struct {
             if (active[0] > 0) {
                 // active true
                 // this can write less than advanced TODO handle this case
+                log.debug("7 pos:{d} current: {d}", .{ old_pos + advanced, try old_file.getPos() + size });
                 n = try old_file.copyRange(old_pos, new_file, new_pos, advanced);
+                log.debug("8 pos:{d} current: {d}", .{ old_pos + advanced, try old_file.getPos() + size });
                 assert(n == advanced, "expected {d} got {d}\n", .{ advanced, n });
                 new_pos += n;
             } else {
