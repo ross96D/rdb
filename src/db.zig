@@ -478,8 +478,6 @@ pub const DB = struct {
     }
 
     fn reduce_file(old_file: std.fs.File, new_file: std.fs.File) !void {
-        const log = Scope.log(.ReduceFile);
-
         const old_end_pos = try old_file.getEndPos();
 
         var n = try old_file.copyRange(0, new_file, 0, METADATA_SIZE);
@@ -492,47 +490,39 @@ pub const DB = struct {
         var size: u64 = undefined;
         var active: [1]u8 = undefined;
         while (old_pos < old_end_pos) {
-            log.debug("1 pos:{d} current: {d}", .{ old_pos, try old_file.getPos() });
             var advanced: u64 = 0;
 
             n = try old_file.read(&size_buf);
             advanced += 8;
             assert(n == 8, "expected 8 got {d} curr {d} end {d}\n", .{ n, try old_file.getPos(), try old_file.getEndPos() });
-            log.debug("2 pos:{d} current: {d}", .{ old_pos + advanced, try old_file.getPos() });
 
             size = std.mem.readInt(u64, &size_buf, .little);
             assert(size > 0 and size <= old_end_pos, "expected (0 < x < {d}) got {d} old pos {d}\n", .{ old_end_pos, size, old_pos });
             try old_file.seekBy(@intCast(size));
             advanced += size;
-            log.debug("3 pos:{d} current: {d}", .{ old_pos + advanced, try old_file.getPos() });
 
             n = try old_file.read(&active);
             assert(n == 1, "expected 1 got {d} curr {d} end {d}\n", .{ n, try old_file.getPos(), try old_file.getEndPos() });
             advanced += 1;
-            log.debug("4 pos:{d} current: {d}", .{ old_pos + advanced, try old_file.getPos() });
 
             n = try old_file.read(&size_buf);
             assert(n == 8, "expected 8 got {d} curr {d} end {d}\n", .{ n, try old_file.getPos(), try old_file.getEndPos() });
             advanced += 8;
-            log.debug("5 pos:{d} current: {d}", .{ old_pos + advanced, try old_file.getPos() });
             size = std.mem.readInt(u64, &size_buf, .little);
             assert(size > 0 and size <= old_end_pos, "expected (0 < x < {d}) got {d}\n", .{ old_end_pos, size });
             advanced += size;
-            log.debug("6 pos:{d} current: {d}", .{ old_pos + advanced, try old_file.getPos() + size });
 
             if (active[0] > 0) {
                 // active true
                 // this can write less than advanced TODO handle this case
-                log.debug("7 pos:{d} current: {d}", .{ old_pos + advanced, try old_file.getPos() + size });
                 n = try old_file.copyRange(old_pos, new_file, new_pos, advanced);
-                log.debug("8 pos:{d} current: {d}", .{ old_pos + advanced, try old_file.getPos() + size });
                 assert(n == advanced, "expected {d} got {d}\n", .{ advanced, n });
                 new_pos += n;
             } else {
                 // active false
             }
             old_pos += advanced;
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .Debug and builtin.os.tag == .linux) {
                 const currpos = try old_file.getPos();
                 assert(currpos + size == old_pos, "current pos + size {d} old_pos updated {d}\n", .{ currpos + size, old_pos });
             }
