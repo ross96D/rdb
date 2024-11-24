@@ -522,6 +522,7 @@ pub const DB = struct {
                 // active false
             }
             old_pos += advanced;
+            // on windows copyRange move the file cursor so this check fails. TODO check on windows too
             if (builtin.mode == .Debug and builtin.os.tag == .linux) {
                 const currpos = try old_file.getPos();
                 assert(currpos + size == old_pos, "current pos + size {d} old_pos updated {d}\n", .{ currpos + size, old_pos });
