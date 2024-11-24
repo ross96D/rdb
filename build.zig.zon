@@ -19,6 +19,7 @@
             .url = "https://github.com/ross96D/zart/archive/refs/tags/v0.0.5.tar.gz",
             .hash = "122035578dea09d8fc4fd521c81a1fac220066a20db37347cb176dd0ab039ea278af",
         },
+        .win32 = .{ .path = "external/zigwin32" },
     },
 
     .paths = .{

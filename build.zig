@@ -12,8 +12,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    for (deps) |dep| {
-        lib.root_module.addImport(dep.name, dep.dep.module(dep.name));
+    for (deps) |ndep| {
+        if (ndep) |dep| {
+            lib.root_module.addImport(dep.name, dep.dep.module(dep.name));
+        }
     }
     b.installArtifact(lib);
 
@@ -23,8 +25,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    for (deps) |dep| {
-        shared_lib.root_module.addImport(dep.name, dep.dep.module(dep.name));
+    for (deps) |ndep| {
+        if (ndep) |dep| {
+            shared_lib.root_module.addImport(dep.name, dep.dep.module(dep.name));
+        }
     }
 
     b.installArtifact(shared_lib);
@@ -44,8 +48,10 @@ pub fn build(b: *std.Build) void {
         .filters = test_filters,
         // .sanitize_thread = true,
     });
-    for (deps) |dep| {
-        lib_unit_tests.root_module.addImport(dep.name, dep.dep.module(dep.name));
+    for (deps) |ndep| {
+        if (ndep) |dep| {
+            lib_unit_tests.root_module.addImport(dep.name, dep.dep.module(dep.name));
+        }
     }
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
@@ -60,7 +66,7 @@ pub fn build(b: *std.Build) void {
 fn bench(
     b: *std.Build,
     rdb: *std.Build.Step.Compile,
-    deps: []const Dep,
+    deps: []const ?Dep,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) void {
@@ -70,12 +76,14 @@ fn bench(
         .optimize = optimize,
         .target = target,
     });
-    for (deps) |dep| {
-        // // not add already added deps
-        // if (rdb.root_module.import_table.contains(dep.name)) {
-        //     continue;
-        // }
-        exe.root_module.addImport(dep.name, dep.dep.module(dep.name));
+    for (deps) |ndep| {
+        if (ndep) |dep| {
+            // // not add already added deps
+            // if (rdb.root_module.import_table.contains(dep.name)) {
+            //     continue;
+            // }
+            exe.root_module.addImport(dep.name, dep.dep.module(dep.name));
+        }
     }
     exe.root_module.addImport(rdb.name, &rdb.root_module);
     b.installArtifact(exe);
@@ -90,7 +98,7 @@ inline fn dependencies(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-) []const Dep {
+) []const ?Dep {
     const jdz_allocator = b.dependency("jdz_allocator", .{
         .target = target,
         .optimize = optimize,
@@ -99,8 +107,17 @@ inline fn dependencies(
         .target = target,
         .optimize = optimize,
     });
-    return &[_]Dep{
+    const win32: ?*std.Build.Dependency = if (target.result.os.tag == .windows)
+        b.dependency("win32", .{
+            .target = target,
+            .optimize = optimize,
+        })
+    else
+        null;
+
+    return &[_]?Dep{
         .{ .dep = jdz_allocator, .name = "jdz_allocator" },
         .{ .dep = zart, .name = "zart" },
+        if (target.result.os.tag == .windows) .{ .dep = win32.?, .name = "win32" } else null,
     };
 }

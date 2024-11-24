@@ -47,7 +47,12 @@ test Owned {
 
 pub inline fn tempDir() !std.fs.Dir {
     const path: []const u8 = switch (builtin.os.tag) {
-        .windows => @compileError("TODO support temp dir on windows"),
+        .windows => r: {
+            var path: [256:0]u8 = undefined;
+            const n = @import("win32").storage.file_system.GetTempPath2(256, &path);
+            std.debug.assert(n > 0);
+            break :r path[0..n];
+        },
         else => if (std.posix.getenv("TMPDIR")) |path| path else "/tmp",
     };
     return std.fs.openDirAbsolute(path, .{});
