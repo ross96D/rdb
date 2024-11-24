@@ -19,13 +19,13 @@ struct OptionalBytes
     bool valid;
 };
 
-struct Result open(struct Bytes path);
+struct Result rdb_open(struct Bytes path);
 
-void close(void* db);
+void rdb_close(void* db);
 
-struct OptionalBytes get(void* db, struct Bytes key);
+struct OptionalBytes rdb_get(void* db, struct Bytes key);
 
-bool set(void* db, struct Bytes key, struct Bytes value);
+bool rdb_set(void* db, struct Bytes key, struct Bytes value);
 
-bool remove(void* db, struct Bytes key);
+bool rdb_remove(void* db, struct Bytes key);
 
