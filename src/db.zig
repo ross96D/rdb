@@ -636,14 +636,6 @@ test "fuzzy parallel test writes" {
 
     const now = std.time.microTimestamp();
 
-    var DefaultPrng = std.Random.DefaultPrng.init(blk: {
-        var seed: u64 = undefined;
-        try std.posix.getrandom(std.mem.asBytes(&seed));
-        std.debug.print("seed {d}\n", .{seed});
-        break :blk seed;
-    });
-    const rand = DefaultPrng.random();
-
     const Values = struct {
         key: std.ArrayList(u8) = std.ArrayList(u8).init(testing_allocator),
         val: std.ArrayList(u8) = std.ArrayList(u8).init(testing_allocator),
@@ -662,13 +654,19 @@ test "fuzzy parallel test writes" {
 
     const insert = struct {
         fn insert(
-            Rand: std.Random,
             Mut: *std.Thread.Mutex,
             Db: *DB,
             Vals: *std.ArrayList(Values),
             start: usize,
             end: usize,
         ) !void {
+            var DefaultPrng = std.Random.DefaultPrng.init(blk: {
+                var seed: u64 = undefined;
+                try std.posix.getrandom(std.mem.asBytes(&seed));
+                break :blk seed;
+            });
+            const Rand = DefaultPrng.random();
+
             for (start..end) |_| {
                 var key: [30]u8 = undefined;
                 var value: [30]u8 = undefined;
@@ -695,16 +693,16 @@ test "fuzzy parallel test writes" {
         }
     }.insert;
 
-    const t0 = try std.Thread.spawn(.{}, insert, .{ rand, &mut, &db, &vals, 0, 1000 });
-    const t1 = try std.Thread.spawn(.{}, insert, .{ rand, &mut, &db, &vals, 1000, 2000 });
-    const t2 = try std.Thread.spawn(.{}, insert, .{ rand, &mut, &db, &vals, 2000, 3000 });
-    const t3 = try std.Thread.spawn(.{}, insert, .{ rand, &mut, &db, &vals, 3000, 4000 });
-    const t4 = try std.Thread.spawn(.{}, insert, .{ rand, &mut, &db, &vals, 4000, 5000 });
-    const t5 = try std.Thread.spawn(.{}, insert, .{ rand, &mut, &db, &vals, 5000, 6000 });
-    const t6 = try std.Thread.spawn(.{}, insert, .{ rand, &mut, &db, &vals, 6000, 7000 });
-    const t7 = try std.Thread.spawn(.{}, insert, .{ rand, &mut, &db, &vals, 7000, 8000 });
-    const t8 = try std.Thread.spawn(.{}, insert, .{ rand, &mut, &db, &vals, 8000, 9000 });
-    const t9 = try std.Thread.spawn(.{}, insert, .{ rand, &mut, &db, &vals, 9000, 10000 });
+    const t0 = try std.Thread.spawn(.{}, insert, .{ &mut, &db, &vals, 0, 1000 });
+    const t1 = try std.Thread.spawn(.{}, insert, .{ &mut, &db, &vals, 1000, 2000 });
+    const t2 = try std.Thread.spawn(.{}, insert, .{ &mut, &db, &vals, 2000, 3000 });
+    const t3 = try std.Thread.spawn(.{}, insert, .{ &mut, &db, &vals, 3000, 4000 });
+    const t4 = try std.Thread.spawn(.{}, insert, .{ &mut, &db, &vals, 4000, 5000 });
+    const t5 = try std.Thread.spawn(.{}, insert, .{ &mut, &db, &vals, 5000, 6000 });
+    const t6 = try std.Thread.spawn(.{}, insert, .{ &mut, &db, &vals, 6000, 7000 });
+    const t7 = try std.Thread.spawn(.{}, insert, .{ &mut, &db, &vals, 7000, 8000 });
+    const t8 = try std.Thread.spawn(.{}, insert, .{ &mut, &db, &vals, 8000, 9000 });
+    const t9 = try std.Thread.spawn(.{}, insert, .{ &mut, &db, &vals, 9000, 10000 });
     t0.join();
     t1.join();
     t2.join();
