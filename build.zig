@@ -41,12 +41,13 @@ pub fn build(b: *std.Build) void {
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
     const test_filters = b.option([]const []const u8, "test-filter", "Skip tests that do not match any filter") orelse &[0][]const u8{};
+    const sanitize_thread = b.option(bool, "sanitize_thread", "Enable Thread Sanitizer");
     const lib_unit_tests = b.addTest(.{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
         .filters = test_filters,
-        // .sanitize_thread = true,
+        .sanitize_thread = if (sanitize_thread) |sanitize| sanitize else false,
     });
     for (deps) |ndep| {
         if (ndep) |dep| {
