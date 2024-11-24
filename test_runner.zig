@@ -306,7 +306,7 @@ pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace, ret_
     if (current_test) |ct| {
         std.debug.print("\x1b[31m{s}\npanic running \"{s}\"\n{s}\x1b[0m\n", .{ BORDER, ct, BORDER });
     }
-    std.builtin.panic(msg, error_return_trace, ret_addr);
+    std.debug.panicImpl(error_return_trace, ret_addr, msg);
 }
 
 fn isUnnamed(t: std.builtin.TestFn) bool {
