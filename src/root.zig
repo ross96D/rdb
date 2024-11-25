@@ -48,6 +48,7 @@ pub export fn rdb_open(path: Bytes) Result {
 
 pub export fn rdb_close(database: *db.DB) void {
     database.deinit();
+    global_allocator.destroy(database);
 }
 
 pub export fn rdb_get(database: *db.DB, key: Bytes) OptionalBytes {
