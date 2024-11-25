@@ -163,7 +163,6 @@ pub const DB = struct {
                 allocator.free(entry.key);
                 continue;
             }
-            // TODO add owned keys to list
             _ = tree.set(entry.key, .{
                 .owned = true,
                 .pos = entry.pos,
