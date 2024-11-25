@@ -88,6 +88,7 @@ pub const DB = struct {
         value_size: u64,
         pos: u64,
         active: bool,
+        file_end_pos: usize,
     };
 
     pub fn init(allocator: std.mem.Allocator, path: bytes) !DB {
@@ -142,9 +143,9 @@ pub const DB = struct {
         try _create_tree(self.allocator, self.file, &self.tree);
 
         // TODO inside the config it could be saved the gc_prev_pos
-        self.file_end_pos.store(try self.file.getEndPos(), .seq_cst);
+        self.file_end_pos.store(try self.file.getEndPos(), .release);
         // set gc_prev_pos
-        self.gc_data.prev_pos.store(try self.file.getEndPos(), .seq_cst);
+        self.gc_data.prev_pos.store(try self.file.getEndPos(), .release);
     }
 
     fn _create_tree(allocator: std.mem.Allocator, file: std.fs.File, tree: *zart.Tree(DataPtr)) !void {
@@ -247,7 +248,7 @@ pub const DB = struct {
         defer self.db_mut.unlock();
 
         const dataptr = self.tree.delete(key) orelse return;
-        self.gc_data.has_delete.store(true, .seq_cst);
+        self.gc_data.has_delete.store(true, .release);
 
         try self.file.seekTo(dataptr.pos);
         // set the active byte to false
@@ -325,8 +326,8 @@ pub const DB = struct {
 
     /// append data to the end of the file
     fn append(self: *DB, key: bytes, value: bytes) !Entry {
-        const entry = DB._append(self.file, key, value);
-        self.file_end_pos.store(try self.file.getEndPos(), .seq_cst);
+        const entry = try DB._append(self.file, key, value);
+        self.file_end_pos.store(entry.file_end_pos, .release);
         return entry;
     }
 
@@ -337,43 +338,50 @@ pub const DB = struct {
             .key = key,
             .active = true,
             .pos = undefined,
+            .file_end_pos = 0,
         };
 
         const end = try file.getEndPos();
         try file.seekTo(end);
+        result.file_end_pos = end;
 
         // write key size
         var key_size: [8]u8 = undefined;
         std.mem.writeInt(u64, &key_size, key.len, .little);
         var n = try file.write(&key_size);
         std.debug.assert(n == 8);
+        result.file_end_pos += n;
 
         // write key
         n = try file.write(key);
         std.debug.assert(n == key.len);
+        result.file_end_pos += n;
 
         result.pos = try file.getPos();
         // write active byte
         n = try file.write(&[_]u8{1});
         std.debug.assert(n == 1);
+        result.file_end_pos += n;
 
         // write value size
         var value_size: [8]u8 = undefined;
         std.mem.writeInt(u64, &value_size, value.len, .little);
         n = try file.write(&value_size);
         std.debug.assert(n == 8);
+        result.file_end_pos += n;
 
         // write value
         n = try file.write(value);
         std.debug.assert(n == value.len);
+        result.file_end_pos += n;
 
         return result;
     }
 
     fn gc_check(self: *DB) !void {
-        const end_pos = self.file_end_pos.load(.seq_cst);
-        const gc_prev_pos = self.gc_data.prev_pos.load(.seq_cst);
-        if (end_pos < 2 * gc_prev_pos or !self.gc_data.has_delete.load(.seq_cst)) {
+        const end_pos = self.file_end_pos.load(.acquire);
+        const gc_prev_pos = self.gc_data.prev_pos.load(.acquire);
+        if (end_pos < 2 * gc_prev_pos or !self.gc_data.has_delete.load(.acquire)) {
             return;
         }
         const thread = try std.Thread.spawn(.{}, DB.gc, .{self});
@@ -453,7 +461,7 @@ pub const DB = struct {
         try tempDir.copyFile(&new_filename, std.fs.cwd(), self.path, .{});
 
         self.file = try cwd.openFile(self.path, .{ .mode = .read_write, .lock = .shared });
-        self.gc_data.prev_pos.store(try self.file.getEndPos(), .seq_cst);
+        self.gc_data.prev_pos.store(try self.file.getEndPos(), .release);
 
         // create tree
         var tree = zart.Tree(DataPtr).init(self.allocator);
@@ -465,7 +473,7 @@ pub const DB = struct {
         const deleted = self.gc_data.deleted().?;
         defer deleted.deinit();
         self.gc_data.set_deleted(null);
-        self.gc_data.has_delete.store(false, .seq_cst);
+        self.gc_data.has_delete.store(false, .release);
 
         for (deleted.items) |key| {
             const result = self.tree.delete(key);
