@@ -1,4 +1,6 @@
 const std = @import("std");
+const CrossTarget = std.zig.CrossTarget;
+const assert = std.debug.assert;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -37,6 +39,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    // -------------------------- clients --------------------------
+    client_go(b, b.step("clients:go", "build libs for go"));
 }
 
 /// fast compile check for easy development
@@ -156,3 +161,79 @@ inline fn dependencies(
         if (target.result.os.tag == .windows) Dep.init(win32.?, "win32") else null,
     };
 }
+
+const platforms = .{
+    .{ "x86_64-linux", "x86_64_v3+aes" },
+    .{ "aarch64-linux", "baseline+aes+neon" },
+    .{ "x86_64-windows", "x86_64_v3+aes" },
+    // .{ "x86_64-macos", "x86_64_v3+aes" },
+    // .{ "aarch64-macos", "baseline+aes+neon" },
+};
+
+fn client_go(b: *std.Build, step_clients_go: *std.Build.Step) void {
+    const header = CopyFile.create(b, b.path("rdb.h"), "clients/go/pkg/native/rdb.h");
+    step_clients_go.dependOn(&header.step);
+
+    inline for (platforms) |platform| {
+        const name = platform[0];
+        const cross_target = CrossTarget.parse(.{
+            .arch_os_abi = name,
+            .cpu_features = platform[1],
+        }) catch unreachable;
+        const resolved_target = b.resolveTargetQuery(cross_target);
+
+        const lib = b.addStaticLibrary(.{
+            .name = "rdb",
+            .root_source_file = b.path("src/root.zig"),
+            .target = resolved_target,
+            .optimize = .ReleaseFast,
+        });
+        const deps = dependencies(b, resolved_target, .ReleaseFast);
+        Dep.apply_deps(deps, &lib.root_module);
+
+        step_clients_go.dependOn(&b.addInstallFile(
+            lib.getEmittedBin(),
+            b.pathJoin(&.{ "../clients/go/pkg/native/", name, lib.out_filename }),
+        ).step);
+    }
+}
+
+const CopyFile = struct {
+    step: std.Build.Step,
+    generated_file: std.Build.GeneratedFile,
+
+    source: std.Build.LazyPath,
+    destination: []const u8,
+
+    pub fn create(b: *std.Build, source: std.Build.LazyPath, destination: []const u8) *CopyFile {
+        const ret = b.allocator.create(CopyFile) catch @panic("OOM");
+        ret.* = CopyFile{
+            .source = source,
+            .destination = destination,
+            .step = std.Build.Step.init(.{
+                .id = .custom,
+                .owner = b,
+                .name = b.fmt("copy {s} to {s}", .{ source.getDisplayName(), std.fs.path.basename(destination) }),
+                .makeFn = make,
+            }),
+            .generated_file = .{ .step = &ret.step },
+        };
+        ret.source.addStepDependencies(&ret.step);
+        return ret;
+    }
+
+    fn make(step: *std.Build.Step, _: std.Progress.Node) !void {
+        const b = step.owner;
+        const self: *CopyFile = @fieldParentPtr("step", step);
+        const source_path = self.source.getPath2(b, step);
+
+        _ = try std.fs.Dir.updateFile(
+            b.build_root.handle,
+            source_path,
+            b.build_root.handle,
+            self.destination,
+            .{},
+        );
+        self.generated_file.path = self.destination;
+    }
+};
