@@ -2,4 +2,4 @@
 zig-out
 .vscode
 kcov_out
-clients/go/pkg/native
+bindings/go/pkg/native

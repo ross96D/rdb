@@ -40,8 +40,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // -------------------------- clients --------------------------
-    client_go(b, b.step("clients:go", "build libs for go"));
+    // -------------------------- bindings --------------------------
+    bindings_go(b, b.step("bindings:go", "build libs for go"));
 }
 
 /// fast compile check for easy development
@@ -170,9 +170,9 @@ const platforms = .{
     // .{ "aarch64-macos", "baseline+aes+neon" },
 };
 
-fn client_go(b: *std.Build, step_clients_go: *std.Build.Step) void {
-    const header = CopyFile.create(b, b.path("rdb.h"), "clients/go/pkg/native/rdb.h");
-    step_clients_go.dependOn(&header.step);
+fn bindings_go(b: *std.Build, step_bindings_go: *std.Build.Step) void {
+    const header = CopyFile.create(b, b.path("rdb.h"), "bindings/go/pkg/native/rdb.h");
+    step_bindings_go.dependOn(&header.step);
 
     inline for (platforms) |platform| {
         const name = platform[0];
@@ -191,9 +191,9 @@ fn client_go(b: *std.Build, step_clients_go: *std.Build.Step) void {
         const deps = dependencies(b, resolved_target, .ReleaseFast);
         Dep.apply_deps(deps, &lib.root_module);
 
-        step_clients_go.dependOn(&b.addInstallFile(
+        step_bindings_go.dependOn(&b.addInstallFile(
             lib.getEmittedBin(),
-            b.pathJoin(&.{ "../clients/go/pkg/native/", name, lib.out_filename }),
+            b.pathJoin(&.{ "../bindings/go/pkg/native/", name, lib.out_filename }),
         ).step);
     }
 }
