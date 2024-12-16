@@ -300,6 +300,14 @@ pub fn create_tmp_dir(shell: *Shell) ![]const u8 {
     return tmp_absolute;
 }
 
+pub fn realpath(shell: *Shell, dir: std.fs.Dir, path: []const u8) ![]const u8 {
+    return try dir.realpathAlloc(shell.arena.allocator(), path);
+}
+
+pub fn path_join(shell: *Shell, paths: []const []const u8) ![]const u8 {
+    return std.fs.path.join(shell.arena.allocator(), paths);
+}
+
 const FindOptions = struct {
     where: []const []const u8,
     extension: ?[]const u8 = null,
@@ -453,7 +461,7 @@ pub fn exec_zig(shell: *Shell, comptime cmd: []const u8, cmd_args: anytype) !voi
     var argv = Argv.init(golbal_gpa());
     defer argv.deinit();
 
-    try argv.append_new_arg("{s}", .{shell.zig_exe.?});
+    try argv.append_new_arg("{s}", .{shell.zig_exe});
     try expand_argv(&argv, cmd, cmd_args);
 
     return shell.exec_inner(argv.slice(), .{});
