@@ -60,8 +60,16 @@ fn check(
         .target = opts.target,
         .optimize = opts.optimize,
     });
+    const test_lib = b.addTest(.{
+        .name = "rdb",
+        .root_source_file = b.path("src/root.zig"),
+        .target = opts.target,
+        .optimize = opts.optimize,
+    });
     Dep.apply_deps(opts.deps, &lib.root_module);
+    Dep.apply_deps(opts.deps, &test_lib.root_module);
     step_check.dependOn(&lib.step);
+    step_check.dependOn(&test_lib.step);
 }
 
 fn run_tests(
