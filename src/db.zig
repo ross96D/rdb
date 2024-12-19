@@ -51,6 +51,7 @@ pub const DB = struct {
     file_end_pos: Atomic(u64),
 
     db_mut: *std.Thread.RwLock,
+    deinit_mut: *std.Thread.RwLock,
 
     gc_data: *GC,
 
@@ -101,6 +102,7 @@ pub const DB = struct {
             .file_end_pos = undefined,
             .gc_data = undefined,
             .db_mut = undefined,
+            .deinit_mut = undefined,
         };
         errdefer db.deinit();
 
@@ -109,18 +111,32 @@ pub const DB = struct {
 
         db.db_mut = try db.allocator.create(std.Thread.RwLock);
         db.db_mut.* = .{};
+        db.deinit_mut = try db.allocator.create(std.Thread.RwLock);
+        db.deinit_mut.* = .{};
 
         // TODO add diagnostic for better error logging?
         try db.start();
         return db;
     }
 
+    fn is_closed(self: *DB) bool {
+        return @intFromPtr(self.gc_data) == @sizeOf(DB);
+    }
+    fn assert_open(self: *DB) !void {
+        if (self.is_closed()) {
+            return error.ClosedDB;
+        }
+    }
+
     pub fn deinit(self: *DB) void {
         self.gc_data.collecting.lock();
+        self.deinit_mut.lock();
 
         self.tree_deinit();
         self.allocator.destroy(self.gc_data);
         self.allocator.destroy(self.db_mut);
+        self.allocator.destroy(self.deinit_mut);
+        self.gc_data = @ptrFromInt(@sizeOf(DB));
     }
 
     fn tree_deinit(self: *DB) void {
@@ -173,6 +189,12 @@ pub const DB = struct {
 
     const SetConfig = struct { own: bool = false };
     pub fn set(self: *DB, key: bytes, value: bytes, config: SetConfig) !void {
+        try assert_open(self);
+        if (!self.deinit_mut.tryLockShared()) {
+            return error.ClosedDB;
+        }
+        defer self.deinit_mut.unlockShared();
+
         self.db_mut.lock();
         defer self.db_mut.unlock();
 
@@ -219,6 +241,12 @@ pub const DB = struct {
     }
 
     pub fn search(self: *DB, key: bytes) !?Owned(bytes) {
+        try assert_open(self);
+        if (!self.deinit_mut.tryLockShared()) {
+            return error.ClosedDB;
+        }
+        defer self.deinit_mut.unlockShared();
+
         self.db_mut.lockShared();
         defer self.db_mut.unlockShared();
 
@@ -243,6 +271,12 @@ pub const DB = struct {
     }
 
     pub fn delete(self: *DB, key: bytes) !void {
+        try assert_open(self);
+        if (!self.deinit_mut.tryLockShared()) {
+            return error.ClosedDB;
+        }
+        defer self.deinit_mut.unlockShared();
+
         self.db_mut.lock();
         defer self.db_mut.unlock();
 
@@ -883,5 +917,55 @@ test "reduce_file" {
                 return err;
             };
         }
+    }
+}
+
+test "no losses on shutdown" {
+    var db = try DB.init(testing_allocator, "no_losses_on_shutdown");
+    defer std.fs.cwd().deleteFile("no_losses_on_shutdown") catch unreachable;
+
+    var keys = std.ArrayList([]u8).init(testing_allocator);
+    var values = std.ArrayList([]u8).init(testing_allocator);
+
+    var arena = std.heap.ArenaAllocator.init(testing_allocator);
+    const iterations = 1000;
+    defer arena.deinit();
+    for (0..iterations) |i| {
+        try keys.append(try std.fmt.allocPrint(arena.allocator(), "key{d}", .{i}));
+        try values.append(try std.fmt.allocPrint(arena.allocator(), "val{d}", .{i}));
+    }
+
+    var t1 = try std.Thread.spawn(.{}, struct {
+        fn f(_db: *DB) void {
+            std.time.sleep(10000000);
+            _db.deinit();
+        }
+    }.f, .{&db});
+
+    var count: usize = 0;
+    for (0..iterations) |i| {
+        std.time.sleep(1);
+
+        db.set(keys.items[i], values.items[i], .{}) catch break;
+        count += 1;
+    }
+    t1.join();
+
+    if (db.set("should_error", "should_error", .{})) {
+        return error.NotClosed;
+    } else |_| {}
+
+    db = try DB.init(testing_allocator, "no_losses_on_shutdown");
+    defer db.deinit();
+
+    for (0..count) |i| {
+        const v = try db.search(keys.items[i]) orelse {
+            std.debug.print("key not found {s}", .{keys.items[i]});
+            return error.NotFound;
+        };
+        try std.testing.expectEqualDeep(values.items[i], v.value);
+    }
+    for (count..iterations) |i| {
+        try std.testing.expectEqual(null, db.search(keys.items[i]));
     }
 }
