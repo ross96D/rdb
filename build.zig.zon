@@ -16,8 +16,8 @@
             .hash = "12205353c7f550b1aadf245d70a30d5a0a92eb151f735e15358ff35fcfe53343c93f",
         },
         .zart = .{
-            .url = "https://github.com/ross96D/zart/archive/refs/tags/v0.0.5.tar.gz",
-            .hash = "122035578dea09d8fc4fd521c81a1fac220066a20db37347cb176dd0ab039ea278af",
+            .url = "https://github.com/ross96D/zart/archive/refs/tags/v0.0.9.tar.gz",
+            .hash = "12202043cc56c7c13c84a592c3b7100a9bb5c3f9dc48866ec314f050b855d31203bd",
         },
         .win32 = .{ .path = "external/zigwin32" },
         .zli = .{ .path = "bindings/zli" },
