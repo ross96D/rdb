@@ -72,3 +72,7 @@ func (db Database) Get(key []byte) (AllocatedBytes, error) {
 func (db Database) Remove(key []byte) bool {
 	return bool(C.rdb_remove(db.pointer, toCBytes(key)))
 }
+
+func (db Database) Close() {
+	C.rdb_close(db.pointer)
+}

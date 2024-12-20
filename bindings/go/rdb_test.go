@@ -25,6 +25,7 @@ func Get(db rdb.Database, t *testing.T, key string) []byte {
 func TestDatabase(t *testing.T) {
 	db, err := rdb.New([]byte("test_db"))
 	require.NoError(t, err)
+	defer db.Close()
 	defer os.Remove("test_db")
 
 	db.Set([]byte("key1"), []byte("value1"))
