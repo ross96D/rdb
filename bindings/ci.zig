@@ -54,6 +54,8 @@ pub fn main() !void {
     const parsed_cli = zli.parse(&argiter, CLIArgs);
     switch (parsed_cli) {
         .publish => |command| {
+            assert(!std.mem.eql(u8, command.sha, ""));
+            assert(!std.mem.eql(u8, command.tag, ""));
             const info = VersionInfo{ .sha = command.sha, .tag = command.tag };
             switch (command.binding) {
                 .go => {
