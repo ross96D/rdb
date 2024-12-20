@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	rdb "github.com/ross96D/rdg_go"
+	rdb "github.com/ross96D/rdb-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
