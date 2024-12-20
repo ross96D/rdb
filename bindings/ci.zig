@@ -6,6 +6,7 @@ const std = @import("std");
 const Shell = @import("shell.zig");
 const log = std.log;
 const assert = std.debug.assert;
+const zli = @import("zli/src/zli.zig");
 
 const VersionInfo = struct {
     // tag is the symbolic name of the release used as a git tag and a version for client libraries.
@@ -19,21 +20,52 @@ const VersionInfo = struct {
 const dist_path = "./zig-out/dist/";
 const dist_path_go = dist_path ++ "go";
 
+const CLIArgs = union(enum) {
+    publish: struct {
+        tag: []const u8,
+        sha: []const u8,
+        pub const help =
+            \\ Command: publish
+            \\ 
+            \\ publish the selected binding
+            \\
+            \\ Usage: publish
+            \\
+            \\ publish --tag=v0.1.0 --sha=<value>
+            \\
+            \\ Options:
+            \\
+            \\ -h, --help               Displays this help message then exits
+        ;
+    },
+    none: struct {},
+};
+
 pub fn main() !void {
     log.info("executing ci script", .{});
 
+    // TODO make shure all the requirements are installed
+
     const shell = try Shell.create();
 
-    // TODO make shure all the requirements are installed
-    // _ = try shell.env_get("GITHUB_TOKEN");
-    // const gh_version = shell.exec_stdout("gh --version", .{}) catch {
-    //     return error.NoGh;
-    // };
-    // log.info("gh version {s}", .{gh_version});
+    var argiter = try std.process.ArgIterator.initWithAllocator(std.heap.page_allocator);
+    defer argiter.deinit();
 
-    const info = VersionInfo{ .sha = "23", .tag = "0.0.0" };
-    try build_go(shell, &info);
-    try test_go(shell);
+    const parsed_cli = zli.parse(&argiter, CLIArgs);
+    switch (parsed_cli) {
+        .publish => |command| {
+            const info = VersionInfo{ .sha = command.sha, .tag = command.tag };
+            switch (command.binding) {
+                .go => {
+                    try build_go(shell, &info);
+                    try test_go(shell);
+                    try publish_go(shell, &info);
+                },
+                .none => {},
+            }
+        },
+        .none => {},
+    }
 }
 
 fn test_go(shell: *Shell) !void {
@@ -85,11 +117,9 @@ fn build_go(shell: *Shell, info: *const VersionInfo) !void {
         \\# rdb-go
         \\This repo has been automatically generated from
         \\[ross96D/rdb@{[sha]s}](https://github.com/ross96D/rdb/commit/{[sha]s})
-        \\to keep binary blobs out of the monorepo.
+        \\to keep binary blobs out of the main repo.
         \\
-        \\Please see
-        \\<https://github.com/ross96D/rdb/tree/main/src/clients/go>
-        \\for documentation and contributions.
+        \\See <https://github.com/ross96D/rdb/tree/master/bindings/go>
     , .{ .sha = info.sha });
     try dist_dir.writeFile(.{ .sub_path = "README.md", .data = readme });
 }

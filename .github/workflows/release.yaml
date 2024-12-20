@@ -1,0 +1,23 @@
+on:
+  workflow_dispatch: 
+  
+jobs:
+  test-windows:
+    runs-on: windows-latest
+    name: Build and Test
+    steps:
+      - uses: actions/checkout@v3
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+      - run: zig build test
+
+  test-linux:
+    runs-on: ubuntu-latest
+    name: Build and Test
+    steps:
+      - uses: actions/checkout@v3
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+      - run: zig run bindings/ci.zig -- publish --tag v1123.123 --sha=${{ github.sha }}
