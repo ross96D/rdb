@@ -120,7 +120,7 @@ pub const DB = struct {
     }
 
     fn is_closed(self: *DB) bool {
-        return @intFromPtr(self.gc_data) == @sizeOf(DB);
+        return @intFromPtr(@atomicLoad(*GC, &self.gc_data, .acquire)) == @sizeOf(DB);
     }
     fn assert_open(self: *DB) !void {
         if (self.is_closed()) {
@@ -136,7 +136,10 @@ pub const DB = struct {
         self.allocator.destroy(self.gc_data);
         self.allocator.destroy(self.db_mut);
         self.allocator.destroy(self.deinit_mut);
-        self.gc_data = @ptrFromInt(@sizeOf(DB));
+
+        // this is to signal that the database is closed4
+        // we use atomic operations here to avoid dataraces on the is_closed check
+        @atomicStore(*GC, &self.gc_data, @ptrFromInt(@sizeOf(DB)), .release);
     }
 
     fn tree_deinit(self: *DB) void {
