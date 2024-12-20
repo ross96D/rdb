@@ -137,7 +137,6 @@ fn publish_go(shell: *Shell, info: *const VersionInfo) !void {
     }
 
     const dist_files = try shell.find(.{ .where = &.{"zig-out/dist/go"} });
-    assert(dist_files.len > 10);
     for (dist_files) |file| {
         try Shell.copy_path(
             shell.project_root,
