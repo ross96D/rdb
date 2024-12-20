@@ -32,3 +32,5 @@ jobs:
             }
             return matches[0]
       - run: zig run bindings/ci.zig -- publish --sha=${{ github.sha }} --tag=${{ steps.get_release_name.outputs.result }}
+        env:
+          GIT_TOKEN: ${{ secrets.GIT_TOKEN }}

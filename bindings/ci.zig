@@ -127,7 +127,7 @@ fn publish_go(shell: *Shell, info: *const VersionInfo) !void {
 
     assert(try shell.dir_exists(dist_path_go));
 
-    const token = try shell.env_get("GO_PAT");
+    const token = try shell.env_get("GIT_TOKEN");
     try shell.exec(
         \\git clone --no-checkout --depth 1
         \\  https://oauth2:{token}@github.com/ross96D/rdb-go.git rdb-go
