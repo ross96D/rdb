@@ -138,18 +138,15 @@ fn publish_go(shell: *Shell, info: *const VersionInfo) !void {
 
     const dist_files = try shell.find(.{ .where = &.{"zig-out/dist/go"} });
     for (dist_files) |file| {
-        try Shell.copy_path(
-            shell.project_root,
+        const dst = try std.mem.replaceOwned(
+            u8,
+            shell.arena.allocator(),
             file,
-            shell.project_root,
-            try std.mem.replaceOwned(
-                u8,
-                shell.arena.allocator(),
-                file,
-                dist_path_go,
-                "rdb-go",
-            ),
+            "zig-out/dist/go",
+            "rdb-go",
         );
+        std.log.debug("copying {s} into {s}", .{ file, dst });
+        try Shell.copy_path(shell.project_root, file, shell.project_root, dst);
     }
 
     try shell.pushd("./rdb-go");
