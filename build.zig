@@ -162,10 +162,12 @@ inline fn dependencies(
         b.dependency("win32", .{})
     else
         null;
+    const zli = b.dependency("zli", .{ .target = target, .optimize = optimize });
 
     return &[_]?Dep{
         Dep.init(jdz_allocator, "jdz_allocator"),
         Dep.init(zart, "zart"),
+        Dep.init(zli, "zli"),
         if (target.result.os.tag == .windows) Dep.init(win32.?, "win32") else null,
     };
 }
