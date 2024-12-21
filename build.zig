@@ -42,6 +42,8 @@ pub fn build(b: *std.Build) void {
 
     // -------------------------- bindings --------------------------
     bindings_go(b, b.step("bindings:go", "build libs for go"));
+
+    cli(b, target, lib, deps);
 }
 
 /// fast compile check for easy development
@@ -247,3 +249,27 @@ const CopyFile = struct {
         self.generated_file.path = self.destination;
     }
 };
+
+fn cli(b: *std.Build, target: std.Build.ResolvedTarget, rdb: *std.Build.Step.Compile, deps: []const ?Dep) void {
+    const cli_artifact = b.addExecutable(.{
+        .name = "rdbcli",
+        .root_source_file = b.path("cli/main.zig"),
+        .optimize = .ReleaseFast,
+        .target = target,
+    });
+    Dep.apply_deps(deps, &cli_artifact.root_module);
+    const cli_run_artifact = b.addRunArtifact(cli_artifact);
+    // This allows the user to pass arguments to the application in the build
+    // command itself, like this: `zig build run -- arg1 arg2 etc`
+    if (b.args) |args| {
+        cli_run_artifact.addArgs(args);
+    }
+
+    cli_artifact.root_module.addImport("rdb", &rdb.root_module);
+
+    const cli_step = b.step("cli", "install the cli");
+    const cli_run = b.step("cli:run", "run the cli");
+    cli_step.dependOn(&b.addInstallArtifact(cli_artifact, .{}).step);
+    cli_run.dependOn(&cli_run_artifact.step);
+    //
+}
