@@ -45,20 +45,21 @@ pub fn main() !void {
             const index = ctx.args.format(ctx.count.* + 1, &gbuffer);
             var _key: []const u8 = undefined;
             var _value: []const u8 = undefined;
-            if (std.unicode.utf8ValidateSlice(key)) {
+            if (std.unicode.utf8ValidateSlice(key) and is_printable(key)) {
                 _key = key;
             } else {
-                const buffer = try allocator.alloc(u8, key.len * 2);
-                hex.SimdHexEncode.encode(key, buffer);
-                _value = buffer;
+                const key_buffer = try allocator.alloc(u8, key.len * 2);
+                hex.SimdHexEncode.encode(key, key_buffer);
+                _value = key_buffer;
             }
-            if (std.unicode.utf8ValidateSlice(value)) {
+            if (std.unicode.utf8ValidateSlice(value) and is_printable(value)) {
                 _value = value;
             } else {
-                const buffer = try allocator.alloc(u8, value.len * 2);
-                hex.SimdHexEncode.encode(value, buffer);
-                _value = value;
+                const val_buffer = try allocator.alloc(u8, value.len * 2);
+                hex.SimdHexEncode.encode(value, val_buffer);
+                _value = val_buffer;
             }
+
             std.debug.print("{s} - key: {s} value: {s}\n", .{ index, _key, _value });
             ctx.count.* += 1;
             return ctx.count.* < ctx.args.limit;
@@ -76,4 +77,13 @@ fn check_path(path: []const u8) !void {
     if (stats.kind != .file) {
         return error.NotAFile;
     }
+}
+
+fn is_printable(slice: []const u8) bool {
+    for (slice) |s| {
+        if (!std.ascii.isPrint(s)) {
+            return false;
+        }
+    }
+    return true;
 }
