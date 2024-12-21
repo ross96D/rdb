@@ -29,3 +29,6 @@ bool rdb_set(void* db, struct Bytes key, struct Bytes value);
 
 bool rdb_remove(void* db, struct Bytes key);
 
+typedef bool (*Callback) (void*, struct Bytes, struct Bytes);
+
+bool rdb_foreach(void* db, void* ctx, Callback fn);

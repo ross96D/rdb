@@ -9,11 +9,16 @@ package rdb
 #cgo darwin,amd64 LDFLAGS: ${SRCDIR}/pkg/native/x86_64-macos/librdb.a
 
 #include <stdlib.h>
+#include <stdint.h>
 #include "./pkg/native/rdb.h"
+
+extern bool rdb_go_callback(uintptr_t, struct Bytes, struct Bytes);
+
 */
 import "C"
 import (
 	"errors"
+	"runtime/cgo"
 	"unsafe"
 )
 
@@ -71,6 +76,27 @@ func (db Database) Get(key []byte) (AllocatedBytes, error) {
 
 func (db Database) Remove(key []byte) bool {
 	return bool(C.rdb_remove(db.pointer, toCBytes(key)))
+}
+
+type GoCallback = func([]byte, []byte) bool
+
+//export rdb_go_callback
+func rdb_go_callback(handle C.uintptr_t, key C.struct_Bytes, value C.struct_Bytes) C._Bool {
+	h := cgo.Handle(handle)
+	callback := h.Value().(GoCallback)
+	return C._Bool(callback(fromCBytes(key), fromCBytes(value)))
+}
+
+// Bytes in the callback are C owned bytes DO NOT USE THEM OUTSIDE THE CALLBACK BODY.
+// In case you need to store them and use them the solution is to copy the bytes to
+// golang object
+//
+// calling a [Database] function inside the body is ilegal behaviour
+func (db Database) ForEach(fn GoCallback) {
+	handle := cgo.NewHandle(fn)
+	defer handle.Delete()
+
+	C.rdb_foreach(db.pointer, (unsafe.Pointer)(handle), C.Callback(C.rdb_go_callback))
 }
 
 func (db Database) Close() {
