@@ -122,7 +122,7 @@ pub const DB = struct {
     fn is_closed(self: *DB) bool {
         return @intFromPtr(@atomicLoad(*GC, &self.gc_data, .acquire)) == @sizeOf(DB);
     }
-    fn assert_open(self: *DB) !void {
+    fn check_is_open(self: *DB) !void {
         if (self.is_closed()) {
             return error.ClosedDB;
         }
@@ -192,7 +192,7 @@ pub const DB = struct {
 
     const SetConfig = struct { own: bool = false };
     pub fn set(self: *DB, key: bytes, value: bytes, config: SetConfig) !void {
-        try assert_open(self);
+        try check_is_open(self);
         if (!self.deinit_mut.tryLockShared()) {
             return error.ClosedDB;
         }
@@ -244,7 +244,7 @@ pub const DB = struct {
     }
 
     pub fn search(self: *DB, key: bytes) !?Owned(bytes) {
-        try assert_open(self);
+        try check_is_open(self);
         if (!self.deinit_mut.tryLockShared()) {
             return error.ClosedDB;
         }
@@ -274,7 +274,7 @@ pub const DB = struct {
     }
 
     pub fn delete(self: *DB, key: bytes) !void {
-        try assert_open(self);
+        try check_is_open(self);
         if (!self.deinit_mut.tryLockShared()) {
             return error.ClosedDB;
         }
@@ -292,6 +292,54 @@ pub const DB = struct {
         if (self.gc_data.deleted()) |deleted| {
             deleted.append(key) catch unreachable;
         }
+    }
+
+    pub fn for_each(
+        self: *DB,
+        allocator: std.mem.Allocator,
+        T: type,
+        ctx_: T,
+        fun: fn (T, []const u8, []const u8) anyerror!bool,
+    ) !void {
+        const ctx_t = struct {
+            db: *DB,
+            allocator: std.mem.Allocator,
+            parent_ctx: @TypeOf(ctx_),
+        };
+        const ctx_v: ctx_t = .{
+            .db = self,
+            .allocator = allocator,
+            .parent_ctx = ctx_,
+        };
+        const inner_fun = struct {
+            fn f(
+                node: *const zart.Tree(DataPtr).Node,
+                key: []const u8,
+                _: usize,
+                _: usize,
+                ctx: ctx_t,
+            ) !bool {
+                if (node.leaf) |leaf| {
+                    const dataptr = leaf.value;
+                    ctx.db.file.seekTo(dataptr.pos + 1) catch unreachable; // todo return false?? or an error??
+
+                    var sizebuff: [8]u8 = undefined;
+                    var n = ctx.db.file.read(&sizebuff) catch unreachable;
+                    assert(n == 8, "expected 8 got {d}", .{n});
+                    const size = std.mem.readInt(u64, &sizebuff, .little);
+
+                    const value = ctx.allocator.alloc(u8, size) catch unreachable;
+                    defer ctx.allocator.free(value);
+
+                    n = ctx.db.file.read(value) catch unreachable;
+                    assert(n == size, "expected {d} got {d}", .{ size, n });
+
+                    return fun(ctx.parent_ctx, key, value);
+                }
+                return true;
+            }
+        }.f;
+        try self.tree.for_each_with_key(allocator, ctx_v, inner_fun);
     }
 
     /// reads a key value entry on the file on the current position
@@ -586,7 +634,7 @@ var allocator_instance = switch (mode) {
     .ReleaseSmall => std.heap.GeneralPurposeAllocator(.{}){},
     .ReleaseSafe => std.heap.GeneralPurposeAllocator(.{}){},
 };
-test "insert-update-search" {
+test "insert-update-search-iter" {
     var db = try DB.init(testing_allocator, "insert-search_test_file");
     defer std.fs.cwd().deleteFile("insert-search_test_file") catch unreachable;
 
@@ -619,6 +667,21 @@ test "insert-update-search" {
     } else {
         return error.KeyNotFound;
     }
+
+    const fun = struct {
+        fn f(_: void, key: []const u8, value: []const u8) !bool {
+            if (std.mem.eql(u8, key, "key1")) {
+                try std.testing.expectEqual("v1", value);
+            } else if (std.mem.eql(u8, key, "key1")) {
+                try std.testing.expectEqual("v2", value);
+            } else {
+                std.debug.print("key: {s}\n", .{key});
+                return error.KeyNotFound;
+            }
+            return true;
+        }
+    }.f;
+    try db.for_each(testing_allocator, void, {}, fun);
 
     db.deinit();
 }

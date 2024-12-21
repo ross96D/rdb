@@ -14,6 +14,8 @@ var allocator_instance = switch (mode) {
     .ReleaseSafe => std.heap.GeneralPurposeAllocator(.{}){},
 };
 
+pub const DB = db.DB;
+
 pub const Result = extern struct {
     database: ?*db.DB = null,
     err: ?[*:0]const u8 = null,
@@ -79,6 +81,29 @@ pub export fn rdb_set(database: *db.DB, key: Bytes, value: Bytes) bool {
 pub export fn rdb_remove(database: *db.DB, key: Bytes) bool {
     database.delete(toSlice(key.ptr, key.len)) catch {
         // TODO handle error
+        return false;
+    };
+    return true;
+}
+
+pub export fn rdb_foreach(database: *db.DB, caller_ctx_: *anyopaque, cfun: *const fn (*anyopaque, Bytes, Bytes) callconv(.C) bool) bool {
+    var arena = std.heap.ArenaAllocator.init(global_allocator);
+    defer arena.deinit();
+    const T = struct {
+        fun: *const fn (*anyopaque, Bytes, Bytes) callconv(.C) bool,
+        caller_ctx: *anyopaque,
+    };
+    const fun = struct {
+        fn f(context: T, key: []const u8, value: []const u8) !bool {
+            return context.fun(
+                context.caller_ctx,
+                .{ .ptr = key.ptr, .len = key.len },
+                .{ .ptr = value.ptr, .len = value.len },
+            );
+        }
+    }.f;
+    const ctx = T{ .fun = cfun, .caller_ctx = caller_ctx_ };
+    database.for_each(arena.allocator(), T, ctx, fun) catch {
         return false;
     };
     return true;
